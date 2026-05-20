@@ -1,0 +1,27 @@
+{
+  "name": "Oven Bake Pizza – Staff",
+  "short_name": "OBP Staff",
+  "description": "Oven Bake Pizza Bhera – Staff Delivery Panel",
+  "start_url": "./staff_panel_v4.html",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#e63946",
+  "theme_color": "#e63946",
+  "lang": "ur",
+  "icons": [
+    {
+      "src": "https://cdn.phototourl.com/free/2026-05-18-dc007e3d-8822-4995-a527-b247c54a17a2.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "https://cdn.phototourl.com/free/2026-05-18-dc007e3d-8822-4995-a527-b247c54a17a2.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ],
+  "categories": ["food", "productivity"],
+  "screenshots": []
+}

@@ -1,0 +1,2494 @@
+<!DOCTYPE html>
+<html lang="ur">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Staff Panel - Oven Bake Pizza Bhera</title>
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#e63946">
+<link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700;800;900&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+// ── SERVICE WORKER REGISTRATION ──
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('sw.js', { scope: './' })
+    .then(reg => {
+      window._swReg = reg;
+      console.log('[SW] Registered:', reg.scope);
+    })
+    .catch(err => console.log('[SW] Registration failed:', err));
+  // Listen for messages from SW (background order notifications)
+  navigator.serviceWorker.addEventListener('message', event => {
+    if (event.data && event.data.type === 'NEW_ORDER') {
+      // App received message from SW — trigger alert if online
+      if (window.isOnline !== false && window.staffData) {
+        if (navigator.vibrate) navigator.vibrate([900, 200, 900, 200, 900]);
+      }
+    }
+  });
+}
+// ── PAGE VISIBILITY — Keep Firebase listener alive ──
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') {
+    // Page came to foreground — ensure listeners are active
+    if (window._staffOrdersRestart) window._staffOrdersRestart();
+  }
+});
+</script>
+<style>
+:root{
+  --red:#e63946;--red-dark:#c1121f;--red-light:#ff6b6b;
+  --dark:#1a1a2e;--gray:#6b7280;--light:#f4f6fb;
+  --green:#059669;--blue:#2563eb;--orange:#d97706;
+  --purple:#7c3aed;--teal:#0891b2;
+  --radius:14px;--card-shadow:0 4px 20px rgba(0,0,0,0.08);
+}
+*{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent;}
+body{font-family:'Nunito',sans-serif;background:var(--light);color:var(--dark);overscroll-behavior:none;}
+
+/* ══ TOAST ══ */
+.toast{position:fixed;top:24px;left:50%;transform:translateX(-50%) translateY(-10px);background:#1a1a2e;color:#fff;padding:12px 20px;border-radius:14px;font-size:13px;z-index:99999;opacity:0;transition:.3s;max-width:88vw;text-align:center;box-shadow:0 8px 32px rgba(0,0,0,0.3);}
+.toast.show{opacity:1;transform:translateX(-50%) translateY(0);}
+
+/* ══ LOGIN ══ */
+#staff-login{position:fixed;inset:0;background:linear-gradient(145deg,#c1121f 0%,#e63946 50%,#ff9a9e 100%);display:flex;align-items:center;justify-content:center;z-index:9999;transition:.4s;}
+.login-card{background:#fff;border-radius:28px;padding:36px 28px;width:340px;max-width:92vw;box-shadow:0 32px 80px rgba(0,0,0,0.3);text-align:center;animation:popIn .4s cubic-bezier(.34,1.56,.64,1);}
+@keyframes popIn{from{transform:scale(.85);opacity:0;}to{transform:scale(1);opacity:1;}}
+.login-logo{width:88px;height:88px;border-radius:50%;margin:0 auto 14px;border:4px solid rgba(230,57,70,0.15);object-fit:cover;display:block;}
+.login-card h2{font-size:22px;font-weight:900;margin-bottom:4px;color:var(--dark);}
+.login-card p{font-size:13px;color:var(--gray);margin-bottom:22px;}
+.inp{width:100%;padding:14px 16px;border:2.5px solid #eef0f6;border-radius:12px;font-size:14px;font-family:'Nunito',sans-serif;margin-bottom:12px;outline:none;transition:.25s;background:#f8fafc;}
+.inp:focus{border-color:var(--red);background:#fff;}
+.btn-login{width:100%;padding:15px;background:linear-gradient(135deg,var(--red-dark),var(--red));color:#fff;border:none;border-radius:14px;font-size:16px;font-weight:800;cursor:pointer;font-family:'Nunito',sans-serif;transition:.2s;position:relative;overflow:hidden;}
+.btn-login:active{transform:scale(.97);}
+.btn-login.loading{opacity:.75;pointer-events:none;}
+.btn-login .spinner{display:none;width:18px;height:18px;border:3px solid rgba(255,255,255,0.4);border-top-color:#fff;border-radius:50%;animation:spin .7s linear infinite;margin:0 auto;}
+.btn-login.loading .spinner{display:block;}
+.btn-login.loading .btn-txt{display:none;}
+@keyframes spin{to{transform:rotate(360deg);}}
+
+/* ══ GPS MODAL ══ */
+@keyframes fadeIn{from{opacity:0;}to{opacity:1;}}
+@keyframes slideUp{from{transform:translateY(100%);}to{transform:translateY(0);}}
+@keyframes floatPin{0%,100%{transform:translateY(0) scale(1);}50%{transform:translateY(-12px) scale(1.08);}}
+@keyframes ringPulse{0%{box-shadow:0 0 0 0 rgba(5,150,105,0.5);}70%{box-shadow:0 0 0 22px rgba(5,150,105,0);}100%{box-shadow:0 0 0 0 rgba(5,150,105,0);}}
+@keyframes scanLine{0%{top:0;}100%{top:100%;}}
+@keyframes checkPop{0%{transform:scale(0) rotate(-20deg);}70%{transform:scale(1.2) rotate(5deg);}100%{transform:scale(1) rotate(0);}}
+@keyframes errorShake{0%,100%{transform:translateX(0);}20%,60%{transform:translateX(-8px);}40%,80%{transform:translateX(8px);}}
+@keyframes spinSlow{to{transform:rotate(360deg);}}
+@keyframes pulse{0%,100%{box-shadow:0 0 0 0 rgba(230,57,70,0.6);}50%{box-shadow:0 0 0 10px rgba(230,57,70,0);}}
+@keyframes bounceIn{from{transform:scale(.7);opacity:0;}to{transform:scale(1);opacity:1;}}
+
+#gps-modal{position:fixed;inset:0;z-index:9500;display:none;align-items:flex-end;justify-content:center;background:rgba(10,10,30,0.7);backdrop-filter:blur(8px);}
+#gps-modal.show{display:flex;animation:fadeIn .25s;}
+.gps-sheet{background:#fff;width:100%;max-width:500px;border-radius:32px 32px 0 0;padding:0 0 max(24px,env(safe-area-inset-bottom)) 0;animation:slideUp .38s cubic-bezier(.34,1.2,.64,1);overflow:hidden;}
+.gps-handle{width:42px;height:5px;background:#e5e7eb;border-radius:10px;margin:14px auto 0;}
+.gps-step{display:none;padding:22px 24px 10px;flex-direction:column;align-items:center;text-align:center;}
+.gps-step.active{display:flex;}
+.gps-pin-wrap{width:110px;height:110px;border-radius:50%;background:linear-gradient(145deg,#d1fae5,#a7f3d0);display:flex;align-items:center;justify-content:center;margin-bottom:18px;position:relative;animation:ringPulse 2.2s infinite;}
+.gps-pin-wrap i{font-size:48px;color:var(--green);animation:floatPin 2.5s ease-in-out infinite;}
+.gps-scan{position:absolute;inset:0;border-radius:50%;overflow:hidden;pointer-events:none;}
+.gps-scan::after{content:'';position:absolute;left:0;right:0;height:3px;background:linear-gradient(90deg,transparent,rgba(5,150,105,0.6),transparent);animation:scanLine 2s linear infinite;}
+.gps-searching-ring{width:90px;height:90px;border-radius:50%;border:4px solid #e5e7eb;border-top:4px solid var(--green);animation:spinSlow .9s linear infinite;margin-bottom:18px;}
+.gps-success-icon{width:100px;height:100px;border-radius:50%;background:linear-gradient(135deg,#059669,#34d399);display:flex;align-items:center;justify-content:center;margin-bottom:18px;animation:checkPop .5s cubic-bezier(.34,1.56,.64,1) both;}
+.gps-success-icon i{font-size:46px;color:#fff;}
+.gps-error-icon{width:100px;height:100px;border-radius:50%;background:linear-gradient(135deg,#dc2626,#f87171);display:flex;align-items:center;justify-content:center;margin-bottom:18px;animation:errorShake .5s ease both;}
+.gps-error-icon i{font-size:44px;color:#fff;}
+.gps-title{font-size:20px;font-weight:900;color:var(--dark);margin-bottom:8px;line-height:1.3;}
+.gps-sub{font-size:13px;color:var(--gray);line-height:1.7;margin-bottom:20px;}
+.gps-features{display:flex;flex-direction:column;gap:10px;width:100%;margin-bottom:20px;}
+.gps-feat{display:flex;align-items:center;gap:12px;background:#f8fafc;border-radius:14px;padding:12px 14px;text-align:left;}
+.gps-feat-icon{width:38px;height:38px;border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:18px;flex-shrink:0;}
+.gps-feat-txt{font-size:13px;font-weight:700;color:var(--dark);}
+.gps-feat-sub{font-size:11px;color:var(--gray);font-weight:600;}
+.gps-btn-row{display:flex;gap:10px;padding:0 24px 8px;width:100%;}
+.gps-btn{flex:1;padding:16px;border:none;border-radius:16px;font-size:15px;font-weight:800;cursor:pointer;font-family:'Nunito',sans-serif;transition:.18s;display:flex;align-items:center;justify-content:center;gap:8px;}
+.gps-btn:active{transform:scale(.96);}
+.gps-btn-green{background:linear-gradient(135deg,#059669,#34d399);color:#fff;box-shadow:0 6px 20px rgba(5,150,105,0.35);}
+.gps-btn-gray{background:#f3f4f6;color:var(--gray);}
+.gps-btn-red{background:linear-gradient(135deg,#dc2626,#ef4444);color:#fff;}
+.gps-btn-full{flex:none;width:calc(100% - 48px);margin:0 auto;}
+.gps-guide{display:flex;flex-direction:column;gap:8px;width:100%;margin-bottom:18px;text-align:left;}
+.gps-guide-step{display:flex;align-items:flex-start;gap:10px;padding:10px 12px;background:#f8fafc;border-radius:12px;}
+.gps-guide-num{width:24px;height:24px;border-radius:50%;background:linear-gradient(135deg,var(--red-dark),var(--red));color:#fff;font-size:12px;font-weight:900;display:flex;align-items:center;justify-content:center;flex-shrink:0;margin-top:1px;}
+.gps-guide-txt{font-size:12px;font-weight:700;color:var(--dark);line-height:1.5;}
+.gps-guide-txt span{color:var(--red);}
+
+/* ══ ORDER INCOMING MODAL ══ */
+#order-modal{position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:8888;display:none;align-items:center;justify-content:center;padding:16px;backdrop-filter:blur(5px);}
+#order-modal.active{display:flex;}
+.order-modal-card{background:#fff;border-radius:24px;padding:24px;width:100%;max-width:420px;animation:bounceIn .4s cubic-bezier(.34,1.56,.64,1);position:relative;}
+.order-pulse{position:absolute;top:-4px;right:-4px;width:18px;height:18px;background:var(--red);border-radius:50%;animation:pulse 1.2s infinite;}
+.order-modal-title{font-size:17px;font-weight:900;color:var(--red);margin-bottom:4px;}
+.order-countdown-bar{height:6px;background:#fee2e2;border-radius:10px;margin:10px 0 14px;overflow:hidden;}
+.order-countdown-fill{height:100%;background:linear-gradient(90deg,var(--red-dark),var(--red));border-radius:10px;transition:width .9s linear;}
+.order-modal-row{display:flex;align-items:flex-start;gap:8px;margin-bottom:7px;font-size:13px;}
+.order-modal-row i{color:var(--red);width:16px;margin-top:2px;flex-shrink:0;}
+.order-modal-btns{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:16px;}
+.btn-accept-big{background:linear-gradient(135deg,#065f46,#059669);color:#fff;border:none;border-radius:14px;padding:16px;font-size:16px;font-weight:800;cursor:pointer;font-family:'Nunito',sans-serif;}
+.btn-reject-big{background:linear-gradient(135deg,#dc2626,#ef4444);color:#fff;border:none;border-radius:14px;padding:16px;font-size:16px;font-weight:800;cursor:pointer;font-family:'Nunito',sans-serif;}
+.btn-accept-big:active,.btn-reject-big:active{transform:scale(.96);}
+
+/* ══ APP LAYOUT ══ */
+#staff-app{display:none;}
+.top-bar{background:linear-gradient(135deg,var(--red-dark),var(--red));color:#fff;padding:14px 16px;display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:100;box-shadow:0 4px 20px rgba(198,18,31,0.35);}
+.top-bar h2{font-size:16px;font-weight:900;}
+.top-bar p{font-size:10px;opacity:.8;margin-top:1px;}
+.icon-btn{background:rgba(255,255,255,0.18);border:none;color:#fff;width:38px;height:38px;border-radius:50%;cursor:pointer;font-size:15px;transition:.2s;display:flex;align-items:center;justify-content:center;}
+.icon-btn:active{transform:scale(.9);}
+.top-bar-right{display:flex;gap:8px;align-items:center;}
+
+/* ══ LOCATION BUTTON — BIG GREEN WHEN ON ══ */
+#loc-toggle-btn{transition:.3s;}
+#loc-toggle-btn.loc-active{background:rgba(5,150,105,0.9) !important;box-shadow:0 0 0 4px rgba(52,211,153,0.4);animation:locPulse 2s infinite;}
+@keyframes locPulse{0%,100%{box-shadow:0 0 0 4px rgba(52,211,153,0.4);}50%{box-shadow:0 0 0 8px rgba(52,211,153,0.1);}}
+
+/* ══ ONLINE BADGE ══ */
+.online-badge{display:inline-flex;align-items:center;gap:5px;background:rgba(255,255,255,0.15);border-radius:20px;padding:4px 10px;font-size:11px;font-weight:700;margin-top:4px;cursor:pointer;transition:.25s;border:1.5px solid rgba(255,255,255,0.2);}
+.online-badge.online{background:rgba(5,150,105,0.3);border-color:rgba(52,211,153,0.5);}
+.online-badge .dot{width:7px;height:7px;border-radius:50%;background:#fbbf24;transition:.3s;}
+.online-badge.online .dot{background:#34d399;animation:pulse 1.5s infinite;}
+
+/* ══ BOTTOM NAV ══ */
+.bottom-nav{position:fixed;bottom:0;left:0;right:0;background:#fff;border-top:1px solid #f0f0f0;display:flex;box-shadow:0 -4px 24px rgba(0,0,0,0.1);z-index:100;padding-bottom:env(safe-area-inset-bottom);}
+.nav-item{flex:1;padding:10px 0;display:flex;flex-direction:column;align-items:center;gap:3px;cursor:pointer;background:none;border:none;position:relative;}
+.nav-item i{font-size:19px;color:var(--gray);transition:.2s;}
+.nav-item span{font-size:9px;color:var(--gray);font-weight:700;transition:.2s;}
+.nav-item.active i,.nav-item.active span{color:var(--red);}
+.nav-badge{position:absolute;top:6px;right:calc(50% - 20px);background:var(--red);color:#fff;font-size:9px;font-weight:800;min-width:16px;height:16px;border-radius:8px;display:flex;align-items:center;justify-content:center;padding:0 3px;}
+
+/* ══ SCREENS ══ */
+.screen{display:none;padding-bottom:90px;min-height:100vh;}
+.screen.active{display:block;}
+.sec-title{padding:16px 16px 8px;font-size:14px;font-weight:800;color:var(--dark);display:flex;align-items:center;gap:6px;}
+
+/* ══ STAT ROW ══ */
+.stat-row{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin:12px 14px;}
+.stat-box{background:#fff;border-radius:var(--radius);padding:14px 8px;text-align:center;box-shadow:var(--card-shadow);border-top:3px solid var(--red);}
+.stat-box h3{font-size:19px;font-weight:900;color:var(--red);}
+.stat-box p{font-size:9px;color:var(--gray);margin-top:2px;font-weight:700;text-transform:uppercase;}
+
+/* ══ CARDS ══ */
+.card{background:#fff;border-radius:var(--radius);padding:18px;box-shadow:var(--card-shadow);margin:10px 14px;}
+.card h3{font-size:15px;font-weight:800;margin-bottom:14px;}
+
+/* ══ ONLINE TOGGLE CARD ══ */
+.online-toggle-card{background:#fff;border-radius:var(--radius);margin:10px 14px;padding:16px;box-shadow:var(--card-shadow);display:flex;align-items:center;justify-content:space-between;transition:.3s;}
+.online-toggle-card.is-online{border:2px solid #059669;background:#f0fdf4;}
+.toggle-switch{position:relative;width:54px;height:28px;}
+.toggle-switch input{opacity:0;width:0;height:0;}
+.toggle-slider{position:absolute;cursor:pointer;inset:0;background:#e5e7eb;border-radius:28px;transition:.3s;}
+.toggle-slider:before{content:'';position:absolute;width:22px;height:22px;left:3px;top:3px;background:#fff;border-radius:50%;transition:.3s;box-shadow:0 2px 6px rgba(0,0,0,0.2);}
+input:checked+.toggle-slider{background:linear-gradient(135deg,var(--green),#34d399);}
+input:checked+.toggle-slider:before{transform:translateX(26px);}
+
+/* ══ LOCATION CARD ══ */
+.loc-card{background:#fff;border-radius:var(--radius);margin:10px 14px;padding:16px;box-shadow:var(--card-shadow);transition:.3s;}
+.loc-card.loc-live{border:2px solid #059669;background:#f0fdf4;}
+.loc-status{font-size:13px;font-weight:700;}
+.loc-on{color:var(--green);}
+.loc-off{color:var(--red);}
+#loc-map{height:200px;border-radius:12px;margin-top:12px;overflow:hidden;display:none;background:#e8f0fe;}
+#loc-map-frame{width:100%;height:200px;border-radius:12px;}
+
+/* ══ ORDER CARD ══ */
+.order-card{background:#fff;border-radius:var(--radius);margin:0 14px 12px;padding:16px;box-shadow:var(--card-shadow);transition:.2s;}
+.order-card:active{transform:scale(.99);}
+.order-header{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px;}
+.order-id{font-size:12px;color:var(--gray);font-weight:700;}
+.badge{font-size:11px;padding:4px 10px;border-radius:20px;font-weight:800;}
+.badge-pending{background:#fef3c7;color:#d97706;}
+.badge-confirmed{background:#dbeafe;color:#1d4ed8;}
+.badge-delivering{background:#d1fae5;color:#065f46;}
+.badge-completed{background:#f0fdf4;color:#16a34a;}
+.order-customer{font-weight:800;font-size:14px;margin-bottom:2px;}
+.order-meta{font-size:12px;color:var(--gray);margin-bottom:4px;display:flex;align-items:center;gap:5px;}
+.order-items{font-size:13px;color:var(--dark);font-weight:600;margin-bottom:6px;background:#f8fafc;border-radius:8px;padding:6px 10px;}
+.order-total{font-size:17px;font-weight:900;color:var(--red);}
+.order-actions{display:flex;gap:7px;margin-top:12px;flex-wrap:wrap;}
+.btn-sm{padding:9px 14px;border-radius:10px;border:none;font-size:12px;font-weight:700;cursor:pointer;font-family:'Nunito',sans-serif;transition:.2s;display:flex;align-items:center;gap:5px;}
+.btn-sm:active{transform:scale(.95);}
+.btn-green{background:linear-gradient(135deg,#065f46,#059669);color:#fff;}
+.btn-blue{background:linear-gradient(135deg,#1d4ed8,#3b82f6);color:#fff;}
+.btn-red-outline{background:#fee2e2;color:#dc2626;}
+.btn-whatsapp{background:linear-gradient(135deg,#25d366,#128c7e);color:#fff;}
+.btn-call{background:linear-gradient(135deg,#7c3aed,#a78bfa);color:#fff;}
+.btn-map{background:linear-gradient(135deg,#0891b2,#22d3ee);color:#fff;}
+.btn-orange{background:linear-gradient(135deg,var(--orange),#f59e0b);color:#fff;}
+.btn-pink{background:linear-gradient(135deg,#db2777,#f472b6);color:#fff;}
+
+/* ══ MAP SCREEN ══ */
+#ss-map{position:relative;}
+.map-topbar{background:#fff;padding:12px 14px 10px;border-bottom:1px solid #f0f0f0;display:flex;align-items:center;justify-content:space-between;}
+.map-topbar-title{font-size:13px;font-weight:800;display:flex;align-items:center;gap:6px;}
+#full-map-container{width:100%;height:calc(100vh - 115px);position:relative;}
+#full-leaflet-map{width:100%;height:100%;}
+.map-info-bar{position:absolute;bottom:20px;left:14px;right:14px;background:#fff;border-radius:16px;padding:12px 16px;box-shadow:0 8px 32px rgba(0,0,0,0.15);display:flex;align-items:center;justify-content:space-between;z-index:1000;}
+.map-speed-badge{display:flex;align-items:center;gap:6px;font-size:12px;font-weight:800;color:var(--dark);}
+.map-accuracy-badge{font-size:11px;color:var(--gray);font-weight:700;}
+.map-share-btn{background:linear-gradient(135deg,#25d366,#128c7e);color:#fff;border:none;border-radius:12px;padding:8px 14px;font-size:12px;font-weight:800;cursor:pointer;font-family:'Nunito',sans-serif;display:flex;align-items:center;gap:5px;}
+
+/* ══ EARNINGS ══ */
+.earn-hero{background:linear-gradient(135deg,var(--red-dark),var(--red));padding:24px 20px 40px;color:#fff;text-align:center;}
+.earn-hero h2{font-size:34px;font-weight:900;letter-spacing:-1px;}
+.earn-hero p{font-size:13px;opacity:.85;margin-top:4px;}
+.earn-body{background:#fff;border-radius:24px 24px 0 0;margin-top:-20px;padding:20px 16px;min-height:60vh;}
+.earn-row{display:flex;justify-content:space-between;padding:12px 0;border-bottom:1px solid #f3f4f6;font-size:14px;align-items:center;}
+.earn-row:last-child{border:none;}
+.earn-label{font-weight:600;color:var(--gray);}
+.earn-val{font-weight:800;color:var(--dark);}
+.earn-tabs{display:flex;gap:8px;margin:0 0 16px;}
+.earn-tab{flex:1;padding:8px;border:2px solid #e5e7eb;border-radius:10px;font-size:12px;font-weight:800;cursor:pointer;font-family:'Nunito',sans-serif;background:#fff;color:var(--gray);transition:.2s;text-align:center;}
+.earn-tab.active{border-color:var(--red);color:var(--red);background:#fff5f5;}
+
+/* ══ MANAGER DISH LIST ══ */
+.mgr-dish-item{background:#fff;border-radius:12px;padding:12px 14px;margin-bottom:8px;box-shadow:0 2px 8px rgba(0,0,0,0.06);display:flex;align-items:center;gap:10px;}
+.mgr-dish-img{width:48px;height:48px;border-radius:10px;object-fit:cover;background:#fee2e2;flex-shrink:0;}
+.mgr-dish-info{flex:1;min-width:0;}
+.mgr-dish-name{font-size:13px;font-weight:800;color:var(--dark);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.mgr-dish-price{font-size:12px;color:var(--red);font-weight:700;margin-top:2px;}
+.mgr-dish-cat{font-size:10px;color:var(--gray);font-weight:600;}
+.mgr-avail-toggle{width:36px;height:20px;border-radius:20px;background:#e5e7eb;cursor:pointer;position:relative;transition:.25s;flex-shrink:0;border:none;}
+.mgr-avail-toggle.on{background:var(--green);}
+.mgr-avail-toggle::after{content:'';position:absolute;width:14px;height:14px;background:#fff;border-radius:50%;top:3px;left:3px;transition:.25s;box-shadow:0 1px 3px rgba(0,0,0,0.2);}
+.mgr-avail-toggle.on::after{left:19px;}
+.btn-del-dish{background:#fee2e2;color:#dc2626;border:none;border-radius:10px;width:34px;height:34px;display:flex;align-items:center;justify-content:center;cursor:pointer;font-size:14px;flex-shrink:0;transition:.2s;}
+.btn-del-dish:active{transform:scale(.9);}
+
+
+.hist-item{background:#fff;border-radius:12px;padding:14px;margin:0 0 10px;box-shadow:0 2px 10px rgba(0,0,0,0.05);}
+.hist-top{display:flex;justify-content:space-between;margin-bottom:4px;}
+.hist-id{font-size:12px;color:var(--gray);font-weight:700;}
+
+/* ══ DELIVERY COMPLETE EARNINGS POPUP ══ */
+#delivery-earn-modal{position:fixed;inset:0;z-index:9800;display:none;align-items:flex-end;justify-content:center;background:rgba(0,0,0,0.55);backdrop-filter:blur(6px);}
+#delivery-earn-modal.show{display:flex;animation:fadeIn .2s;}
+.earn-sheet{background:#fff;width:100%;max-width:480px;border-radius:32px 32px 0 0;padding:0 0 max(28px,env(safe-area-inset-bottom)) 0;animation:slideUp .38s cubic-bezier(.34,1.2,.64,1);overflow:hidden;}
+.earn-sheet-handle{width:42px;height:5px;background:#e5e7eb;border-radius:10px;margin:14px auto 0;}
+.earn-confetti-row{display:flex;align-items:center;justify-content:center;gap:6px;padding:20px 20px 4px;font-size:32px;}
+.earn-sheet-title{font-size:20px;font-weight:900;color:var(--dark);text-align:center;margin-bottom:4px;}
+.earn-sheet-sub{font-size:13px;color:var(--gray);text-align:center;margin-bottom:18px;}
+.earn-big-amount{text-align:center;background:linear-gradient(135deg,#f0fdf4,#dcfce7);border-radius:20px;margin:0 20px;padding:18px;margin-bottom:14px;}
+.earn-big-amount .amount-num{font-size:40px;font-weight:900;color:var(--green);letter-spacing:-1px;}
+.earn-big-amount .amount-label{font-size:12px;color:var(--gray);font-weight:700;margin-top:2px;}
+.earn-stats-grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin:0 20px 16px;}
+.earn-stat-box{background:#f8fafc;border-radius:14px;padding:12px 8px;text-align:center;}
+.earn-stat-box .stat-num{font-size:18px;font-weight:900;color:var(--dark);}
+.earn-stat-box .stat-lbl{font-size:10px;color:var(--gray);font-weight:700;text-transform:uppercase;margin-top:2px;}
+.earn-sheet-btns{display:flex;gap:10px;padding:0 20px;}
+.earn-sheet-btn{flex:1;padding:15px;border:none;border-radius:16px;font-size:14px;font-weight:800;cursor:pointer;font-family:'Nunito',sans-serif;transition:.18s;display:flex;align-items:center;justify-content:center;gap:7px;}
+.earn-sheet-btn:active{transform:scale(.96);}
+.earn-btn-send{background:linear-gradient(135deg,#25d366,#128c7e);color:#fff;box-shadow:0 4px 16px rgba(37,211,102,0.3);}
+.earn-btn-close{background:#f3f4f6;color:var(--gray);}
+@keyframes earnPop{0%{transform:scale(0.7);opacity:0;}70%{transform:scale(1.07);}100%{transform:scale(1);opacity:1;}}
+.earn-amount-anim{animation:earnPop .45s cubic-bezier(.34,1.56,.64,1) both;}
+.hist-time{font-size:11px;color:var(--gray);}
+.hist-total{font-size:16px;font-weight:900;color:var(--green);}
+
+/* ══ PROFILE ══ */
+.profile-hero{background:linear-gradient(135deg,var(--red-dark),var(--red));padding:30px 20px 50px;color:#fff;text-align:center;}
+.profile-avatar{width:80px;height:80px;border-radius:50%;background:rgba(255,255,255,0.2);display:flex;align-items:center;justify-content:center;font-size:36px;margin:0 auto 10px;border:3px solid rgba(255,255,255,0.4);}
+.profile-body{background:#fff;border-radius:24px 24px 0 0;margin-top:-20px;padding:20px 16px;}
+.profile-row{display:flex;justify-content:space-between;padding:12px 0;border-bottom:1px solid #f3f4f6;font-size:14px;align-items:center;}
+.profile-label{font-weight:600;color:var(--gray);display:flex;align-items:center;gap:8px;}
+.profile-val{font-weight:800;color:var(--dark);}
+
+/* ══ CHAT ══ */
+.chat-messages{height:calc(100vh - 230px);overflow-y:auto;padding:16px;display:flex;flex-direction:column;gap:8px;}
+.cmsg{max-width:80%;padding:10px 14px;border-radius:18px;font-size:13px;font-weight:600;line-height:1.5;}
+.cmsg.sent{background:linear-gradient(135deg,var(--red-dark),var(--red));color:#fff;align-self:flex-end;border-bottom-right-radius:4px;}
+.cmsg.received{background:#f3f4f6;color:var(--dark);align-self:flex-start;border-bottom-left-radius:4px;}
+.cmsg-time{font-size:10px;opacity:.7;margin-top:3px;}
+.chat-input-row{position:sticky;bottom:0;display:flex;gap:8px;padding:12px 16px;background:#fff;border-top:1px solid #f0f0f0;}
+.chat-input-row input{flex:1;padding:12px 14px;border:2px solid #e5e7eb;border-radius:14px;font-size:14px;font-family:'Nunito',sans-serif;outline:none;transition:.2s;}
+.chat-input-row input:focus{border-color:var(--red);}
+.btn-send{width:44px;height:44px;background:linear-gradient(135deg,var(--red-dark),var(--red));color:#fff;border:none;border-radius:14px;cursor:pointer;font-size:16px;flex-shrink:0;display:flex;align-items:center;justify-content:center;}
+
+/* ══ DISH FORM ══ */
+.dish-form{padding:20px 16px;}
+.fg{margin-bottom:14px;}
+.fg label{font-size:12px;font-weight:800;color:var(--dark);display:block;margin-bottom:5px;}
+.fg input,.fg select,.fg textarea{width:100%;padding:12px 14px;border:2px solid #eef0f6;border-radius:10px;font-size:14px;font-family:'Nunito',sans-serif;outline:none;transition:.2s;background:#f8fafc;}
+.fg input:focus,.fg select:focus,.fg textarea:focus{border-color:var(--red);}
+
+/* ══ EMPTY STATE ══ */
+.empty-state{text-align:center;padding:32px 20px;color:var(--gray);}
+.empty-state i{font-size:40px;opacity:.25;display:block;margin-bottom:10px;}
+.empty-state p{font-size:13px;font-weight:700;}
+
+/* ══ RIPPLE ══ */
+.rpl{position:relative;overflow:hidden;}
+.rpl-dot{position:absolute;border-radius:50%;animation:ripple .6s ease-out forwards;pointer-events:none;}
+@keyframes ripple{from{transform:scale(0);opacity:1;}to{transform:scale(1);opacity:0;}}
+
+/* ══ NEW FEATURES STYLES ══ */
+
+/* Speed Meter */
+.speed-card{background:linear-gradient(135deg,#1a1a2e,#16213e);border-radius:var(--radius);margin:10px 14px;padding:16px;color:#fff;display:flex;align-items:center;justify-content:space-between;}
+.speed-gauge{text-align:center;}
+.speed-num{font-size:36px;font-weight:900;color:#34d399;}
+.speed-unit{font-size:11px;opacity:.7;font-weight:700;}
+.speed-label{font-size:12px;opacity:.8;margin-top:4px;}
+.speed-stats{display:flex;flex-direction:column;gap:8px;}
+.speed-stat{display:flex;align-items:center;gap:8px;font-size:12px;font-weight:700;opacity:.9;}
+.speed-stat i{width:16px;color:#34d399;}
+
+/* Weather Widget */
+.weather-card{background:linear-gradient(135deg,#0891b2,#06b6d4);border-radius:var(--radius);margin:10px 14px;padding:14px 16px;color:#fff;display:flex;align-items:center;justify-content:space-between;}
+.weather-info{display:flex;align-items:center;gap:12px;}
+.weather-icon{font-size:32px;}
+.weather-temp{font-size:24px;font-weight:900;}
+.weather-desc{font-size:12px;opacity:.85;font-weight:700;}
+.weather-right{text-align:right;font-size:12px;opacity:.85;font-weight:700;}
+
+/* Break Timer */
+.break-card{background:#fff;border-radius:var(--radius);margin:10px 14px;padding:14px 16px;box-shadow:var(--card-shadow);}
+.break-row{display:flex;align-items:center;justify-content:space-between;}
+.break-timer{font-size:28px;font-weight:900;color:var(--orange);font-variant-numeric:tabular-nums;}
+.break-btns{display:flex;gap:8px;margin-top:10px;}
+.break-btn{flex:1;padding:10px;border:none;border-radius:10px;font-size:12px;font-weight:800;cursor:pointer;font-family:'Nunito',sans-serif;}
+.break-start{background:linear-gradient(135deg,var(--orange),#f59e0b);color:#fff;}
+.break-end{background:#fee2e2;color:#dc2626;}
+
+/* SOS Button */
+.sos-btn{background:linear-gradient(135deg,#dc2626,#ef4444);color:#fff;border:none;border-radius:var(--radius);margin:10px 14px;padding:16px;width:calc(100% - 28px);font-size:16px;font-weight:900;cursor:pointer;font-family:'Nunito',sans-serif;display:flex;align-items:center;justify-content:center;gap:10px;box-shadow:0 6px 24px rgba(220,38,38,0.4);animation:sosPulse 2s infinite;}
+@keyframes sosPulse{0%,100%{box-shadow:0 6px 24px rgba(220,38,38,0.4);}50%{box-shadow:0 6px 32px rgba(220,38,38,0.7);}}
+
+/* Route Card */
+.route-card{background:#fff;border-radius:var(--radius);margin:10px 14px;padding:14px 16px;box-shadow:var(--card-shadow);}
+.route-steps{display:flex;flex-direction:column;gap:6px;margin-top:10px;}
+.route-step{display:flex;align-items:center;gap:10px;font-size:13px;font-weight:700;padding:8px 10px;background:#f8fafc;border-radius:10px;}
+.route-step i{color:var(--blue);width:16px;}
+
+/* Delivery Streak */
+.streak-card{background:linear-gradient(135deg,#f59e0b,#d97706);border-radius:var(--radius);margin:10px 14px;padding:14px 16px;color:#fff;display:flex;align-items:center;justify-content:space-between;}
+.streak-num{font-size:42px;font-weight:900;line-height:1;}
+.streak-fire{font-size:28px;}
+.streak-info{text-align:right;}
+.streak-label{font-size:11px;opacity:.85;font-weight:700;}
+
+/* Customer Rating Popup */
+#rating-modal{position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:8800;display:none;align-items:center;justify-content:center;padding:20px;backdrop-filter:blur(4px);}
+#rating-modal.show{display:flex;}
+.rating-card{background:#fff;border-radius:24px;padding:28px 24px;width:100%;max-width:340px;text-align:center;animation:bounceIn .3s ease;}
+.stars-row{display:flex;justify-content:center;gap:10px;margin:16px 0;font-size:32px;cursor:pointer;}
+.star-item{transition:.2s;opacity:.3;}
+.star-item.active{opacity:1;transform:scale(1.15);}
+
+/* Mood Check */
+.mood-card{background:#fff;border-radius:var(--radius);margin:10px 14px;padding:14px 16px;box-shadow:var(--card-shadow);}
+.mood-row{display:flex;justify-content:space-around;margin-top:10px;}
+.mood-btn{font-size:26px;cursor:pointer;padding:6px;border-radius:10px;transition:.2s;border:2px solid transparent;}
+.mood-btn.selected{border-color:var(--red);background:#fff5f5;}
+.mood-btn:active{transform:scale(.9);}
+
+/* Hotspot map legend */
+.hotspot-legend{display:flex;gap:12px;flex-wrap:wrap;margin-top:8px;}
+.hotspot-dot{width:10px;height:10px;border-radius:50%;display:inline-block;margin-right:4px;}
+
+/* Announcements */
+.announce-card{background:linear-gradient(135deg,#7c3aed,#a78bfa);border-radius:var(--radius);margin:10px 14px;padding:14px 16px;color:#fff;}
+.announce-item{background:rgba(255,255,255,0.15);border-radius:12px;padding:10px 12px;margin-bottom:8px;font-size:13px;font-weight:700;}
+.announce-item:last-child{margin:0;}
+.announce-time{font-size:10px;opacity:.7;margin-top:3px;font-weight:600;}
+
+/* Cash tracker */
+.cash-card{background:#fff;border-radius:var(--radius);margin:10px 14px;padding:14px 16px;box-shadow:var(--card-shadow);}
+.cash-amount{font-size:30px;font-weight:900;color:var(--green);}
+.cash-row{display:flex;gap:8px;margin-top:10px;}
+.cash-btn{flex:1;padding:10px;border:none;border-radius:10px;font-size:13px;font-weight:800;cursor:pointer;font-family:'Nunito',sans-serif;}
+.cash-collect{background:linear-gradient(135deg,var(--green),#34d399);color:#fff;}
+.cash-clear{background:#f3f4f6;color:var(--gray);}
+
+/* Modal-btn alias */
+.modal-btn{flex:1;padding:14px;border:none;border-radius:14px;font-size:14px;font-weight:700;cursor:pointer;font-family:'Nunito',sans-serif;}
+.modal-btn-allow{background:linear-gradient(135deg,var(--green),#34d399);color:#fff;}
+.modal-btn-skip{background:#f3f4f6;color:var(--gray);}
+
+/* Tips popup */
+.tip-popup{position:fixed;bottom:100px;left:14px;right:14px;background:#1a1a2e;color:#fff;border-radius:16px;padding:14px 16px;z-index:9000;display:none;font-size:13px;font-weight:700;box-shadow:0 8px 32px rgba(0,0,0,0.3);animation:slideUp .3s ease;}
+.tip-popup.show{display:block;}
+
+/* Check-in log */
+.checkin-item{display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid #f3f4f6;}
+.checkin-dot{width:10px;height:10px;border-radius:50%;background:var(--green);flex-shrink:0;}
+.checkin-dot.out{background:var(--red);}
+.checkin-txt{font-size:12px;font-weight:700;color:var(--dark);}
+.checkin-time{font-size:11px;color:var(--gray);font-weight:600;}
+</style>
+</head>
+<body>
+<div class="toast" id="toast"></div>
+<div class="tip-popup" id="tip-popup"></div>
+
+<!-- ══ GPS MODAL ══ -->
+<div id="gps-modal">
+  <div class="gps-sheet">
+    <div class="gps-handle"></div>
+    <!-- Step: Ask -->
+    <div class="gps-step" id="gps-step-ask">
+      <div class="gps-pin-wrap"><i class="fas fa-map-marker-alt"></i><div class="gps-scan"></div></div>
+      <div class="gps-title">📍 Location Allow Karein</div>
+      <div class="gps-sub">Delivery track karne ke liye aapki live location zaroori hai</div>
+      <div class="gps-features">
+        <div class="gps-feat"><div class="gps-feat-icon" style="background:#d1fae5;color:#059669;">🛵</div><div><div class="gps-feat-txt">Live Order Tracking</div><div class="gps-feat-sub">Customer real-time track kar sake</div></div></div>
+        <div class="gps-feat"><div class="gps-feat-icon" style="background:#dbeafe;color:#1d4ed8;">🗺️</div><div><div class="gps-feat-txt">Smart Route</div><div class="gps-feat-sub">Fastest route milega</div></div></div>
+        <div class="gps-feat"><div class="gps-feat-icon" style="background:#fef3c7;color:#d97706;">⚡</div><div><div class="gps-feat-txt">Auto Check-in</div><div class="gps-feat-sub">Restaurant par auto check-in</div></div></div>
+      </div>
+    </div>
+    <div class="gps-btn-row" id="gps-ask-btns" style="display:none;">
+      <button class="gps-btn gps-btn-gray" onclick="gpsSkip()">Baad Mein</button>
+      <button class="gps-btn gps-btn-green" onclick="gpsRequestNow()"><i class="fas fa-map-marker-alt"></i> Allow Karein</button>
+    </div>
+
+    <!-- Step: Searching -->
+    <div class="gps-step" id="gps-step-searching">
+      <div class="gps-searching-ring"></div>
+      <div class="gps-title">📡 Location Dhoond Raha...</div>
+      <div class="gps-sub">GPS signal le raha hai, kuch seconds...</div>
+    </div>
+
+    <!-- Step: Success -->
+    <div class="gps-step" id="gps-step-success">
+      <div class="gps-success-icon"><i class="fas fa-check"></i></div>
+      <div class="gps-title">✅ Location Mil Gayi!</div>
+      <div class="gps-sub">Aapki live location active ho gayi hai</div>
+      <div id="gps-success-coords" style="font-size:12px;color:var(--green);font-weight:700;background:#f0fdf4;padding:8px 14px;border-radius:10px;margin-top:-10px;"></div>
+    </div>
+    <div class="gps-btn-row" id="gps-success-btns" style="display:none;">
+      <button class="gps-btn gps-btn-green gps-btn-full" onclick="gpsClose()"><i class="fas fa-check"></i> Shukriya!</button>
+    </div>
+
+    <!-- Step: Denied -->
+    <div class="gps-step" id="gps-step-denied">
+      <div class="gps-error-icon"><i class="fas fa-times"></i></div>
+      <div class="gps-title">Location OFF Hai</div>
+      <div class="gps-sub">Pehle phone ya browser mein location ON karein:</div>
+      <div class="gps-guide" id="gps-browser-guide"></div>
+      <div style="font-size:12px;color:var(--gray);margin-bottom:16px;font-weight:600;">Settings ke baad wapas aayein aur dobara try karein 👇</div>
+    </div>
+    <div class="gps-btn-row" id="gps-denied-btns" style="display:none;">
+      <button class="gps-btn gps-btn-gray" onclick="gpsClose()">Baad Mein</button>
+      <button class="gps-btn gps-btn-red" onclick="gpsRetry()"><i class="fas fa-redo"></i> Dobara Try</button>
+    </div>
+  </div>
+</div>
+
+<!-- ══ CUSTOMER RATING MODAL ══ -->
+<div id="rating-modal">
+  <div class="rating-card">
+    <div style="font-size:20px;">⭐ Customer Ne Rating Di!</div>
+    <div style="font-size:13px;color:var(--gray);margin-top:6px;" id="rating-customer-name">Customer</div>
+    <div class="stars-row" id="stars-display">
+      <span class="star-item active">⭐</span><span class="star-item active">⭐</span>
+      <span class="star-item active">⭐</span><span class="star-item active">⭐</span>
+      <span class="star-item active">⭐</span>
+    </div>
+    <div id="rating-msg" style="font-size:14px;font-weight:800;color:var(--green);">Excellent! 🎉</div>
+    <button onclick="closeRatingModal()" style="width:100%;margin-top:16px;padding:14px;background:linear-gradient(135deg,var(--red-dark),var(--red));color:#fff;border:none;border-radius:14px;font-size:14px;font-weight:800;cursor:pointer;font-family:'Nunito',sans-serif;">Shukriya!</button>
+  </div>
+</div>
+
+<!-- ══ ORDER INCOMING MODAL ══ -->
+<div id="order-modal">
+  <div class="order-modal-card">
+    <div class="order-pulse"></div>
+    <div class="order-modal-title">🔔 Naya Order Aaya!</div>
+    <div id="modal-order-id" style="font-size:12px;color:var(--gray);font-weight:700;margin-bottom:8px;"></div>
+    <div class="order-countdown-bar"><div class="order-countdown-fill" id="modal-countdown-fill"></div></div>
+    <div id="modal-secs" style="font-size:12px;color:var(--orange);font-weight:800;text-align:right;margin-top:-8px;margin-bottom:12px;">45s mein auto-pass</div>
+    <div class="order-modal-row"><i class="fas fa-user"></i><span id="modal-customer"></span></div>
+    <div class="order-modal-row"><i class="fas fa-map-marker-alt"></i><span id="modal-address"></span></div>
+    <div class="order-modal-row"><i class="fas fa-phone"></i><span id="modal-phone"></span></div>
+    <div class="order-modal-row"><i class="fas fa-pizza-slice"></i><span id="modal-items"></span></div>
+    <div class="order-modal-row"><i class="fas fa-rupee-sign"></i><strong id="modal-total" style="font-size:18px;color:var(--red);"></strong></div>
+    <div class="order-modal-btns">
+      <button class="btn-reject-big" onclick="modalDecline()">✗ Reject</button>
+      <button class="btn-accept-big" onclick="modalAccept()">✓ Accept</button>
+    </div>
+  </div>
+</div>
+
+<!-- ══ LOGIN ══ -->
+<div id="staff-login">
+  <div class="login-card">
+    <img class="login-logo" src="https://cdn.phototourl.com/free/2026-05-18-dc007e3d-8822-4995-a527-b247c54a17a2.png" alt="Logo"
+      onerror="this.src='data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><rect fill=%22%23e63946%22 width=%22100%22 height=%22100%22 rx=%2250%22/><text y=%22.9em%22 font-size=%2250%22 x=%2225%22>🍕</text></svg>'">
+    <h2>Staff Login</h2>
+    <p>Oven Bake Pizza Bhera</p>
+    <input class="inp" type="text" id="s-username" placeholder="Username" autocomplete="username"
+      onkeypress="if(event.key==='Enter')document.getElementById('s-pass').focus()">
+    <input class="inp" type="password" id="s-pass" placeholder="Password" autocomplete="current-password"
+      onkeypress="if(event.key==='Enter')staffLogin()">
+    <button class="btn-login" id="staff-login-btn" onclick="staffLogin()">
+      <div class="btn-txt">🔐 Login</div>
+      <div class="spinner"></div>
+    </button>
+  </div>
+</div>
+
+<!-- ══ MAIN APP ══ -->
+<div id="staff-app">
+  <!-- TOP BAR -->
+  <div class="top-bar">
+    <div>
+      <h2 id="staff-greeting">Staff Panel</h2>
+      <div class="online-badge" id="online-badge" onclick="toggleOnlineStatus()">
+        <span class="dot"></span><span id="online-txt">Offline</span>
+      </div>
+    </div>
+    <div class="top-bar-right">
+      <button class="icon-btn" onclick="toggleLocation()" id="loc-toggle-btn" title="Location Toggle">
+        <i class="fas fa-map-marker-alt"></i>
+      </button>
+      <button class="icon-btn" onclick="triggerSOS()" title="SOS" style="background:rgba(220,38,38,0.4);">
+        <i class="fas fa-exclamation-triangle"></i>
+      </button>
+      <button class="icon-btn" onclick="staffLogout()" title="Logout"><i class="fas fa-sign-out-alt"></i></button>
+    </div>
+  </div>
+
+  <!-- ══ SCREEN: HOME (ORDERS) ══ -->
+  <div class="screen active" id="ss-orders">
+    <div class="stat-row">
+      <div class="stat-box"><h3 id="my-deliveries">0</h3><p>Deliveries</p></div>
+      <div class="stat-box"><h3 id="my-earnings">₨0</h3><p>Earnings</p></div>
+      <div class="stat-box"><h3 id="my-pending">0</h3><p>Pending</p></div>
+    </div>
+
+    <!-- Online Toggle Card -->
+    <div class="online-toggle-card" id="online-toggle-card">
+      <div>
+        <div style="font-weight:800;font-size:14px;">Main Online Hoon</div>
+        <div id="loc-status" class="loc-status loc-off" style="font-size:12px;margin-top:2px;">● Offline – Orders nahi milenge</div>
+      </div>
+      <label class="toggle-switch">
+        <input type="checkbox" id="online-toggle-chk" onchange="handleOnlineToggle(this.checked)">
+        <span class="toggle-slider"></span>
+      </label>
+    </div>
+
+    <!-- Delivery Streak -->
+    <div class="streak-card delivery-only" id="streak-card">
+      <div>
+        <div class="streak-num" id="streak-num">0</div>
+        <div style="font-size:12px;opacity:.85;font-weight:700;">Aaj Ka Streak</div>
+        <div style="font-size:10px;opacity:.7;font-weight:600;margin-top:2px;" id="streak-msg">Pehli delivery karo!</div>
+      </div>
+      <div style="text-align:right;">
+        <div class="streak-fire" id="streak-fire">🏆</div>
+        <div style="font-size:10px;opacity:.85;font-weight:700;">Best: <span id="streak-best">0</span></div>
+      </div>
+    </div>
+
+    <!-- Live Location Card -->
+    <div class="loc-card" id="loc-card">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
+        <div style="font-weight:800;font-size:14px;"><i class="fas fa-satellite-dish" style="color:var(--red);margin-right:6px;"></i>Live Location</div>
+        <div style="display:flex;align-items:center;gap:10px;">
+          <span id="loc-badge" style="font-size:11px;background:#fee2e2;color:var(--red);padding:3px 10px;border-radius:20px;font-weight:700;">OFF</span>
+          <!-- Location ON/OFF Toggle -->
+          <label class="toggle-switch" title="Location ON/OFF" style="cursor:pointer;">
+            <input type="checkbox" id="loc-power-toggle" onchange="handleLocPowerToggle(this.checked)">
+            <span class="toggle-slider"></span>
+          </label>
+        </div>
+      </div>
+      <div id="loc-map">
+        <div id="loc-map-frame" style="width:100%;height:200px;border-radius:12px;"></div>
+      </div>
+      <div id="loc-coords" style="font-size:11px;color:var(--gray);margin-top:6px;display:none;display:flex;align-items:center;justify-content:space-between;"></div>
+    </div>
+
+    <!-- Speed Card -->
+    <div class="speed-card delivery-only" id="speed-card" style="display:none;">
+      <div class="speed-gauge">
+        <div class="speed-num" id="speed-val">0</div>
+        <div class="speed-unit">km/h</div>
+        <div class="speed-label">Current Speed</div>
+      </div>
+      <div class="speed-stats">
+        <div class="speed-stat"><i class="fas fa-tachometer-alt"></i><span>Max: <b id="speed-max">0</b> km/h</span></div>
+        <div class="speed-stat"><i class="fas fa-road"></i><span>Distance: <b id="dist-today">0.0</b> km</span></div>
+        <div class="speed-stat"><i class="fas fa-clock"></i><span>Time: <b id="time-driving">00:00</b></span></div>
+      </div>
+    </div>
+
+    <!-- Weather -->
+    <div class="weather-card" id="weather-card" style="display:none;">
+      <div class="weather-info">
+        <div class="weather-icon" id="weather-icon">⛅</div>
+        <div>
+          <div class="weather-temp" id="weather-temp">--°C</div>
+          <div class="weather-desc" id="weather-desc">Loading...</div>
+        </div>
+      </div>
+      <div class="weather-right">
+        <div id="weather-city" style="font-size:13px;font-weight:800;">--</div>
+        <div id="weather-feels" style="margin-top:4px;">Feels: --°C</div>
+        <div id="weather-humidity" style="margin-top:2px;">Humidity: --%</div>
+      </div>
+    </div>
+
+    <!-- Cash on Hand Tracker -->
+    <div class="cash-card">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
+        <div style="font-weight:800;font-size:14px;"><i class="fas fa-money-bill-wave" style="color:var(--green);margin-right:6px;"></i>Cash on Hand</div>
+        <span style="font-size:11px;color:var(--gray);font-weight:700;">COD Collections</span>
+      </div>
+      <div class="cash-amount">₨<span id="cash-amount">0</span></div>
+      <div style="font-size:11px;color:var(--gray);margin-top:2px;">Orders: <span id="cash-orders">0</span> | Avg: ₨<span id="cash-avg">0</span></div>
+      <div class="cash-row">
+        <button class="cash-btn cash-collect" onclick="addCashEntry()"><i class="fas fa-plus"></i> Add Collection</button>
+        <button class="cash-btn cash-clear" onclick="clearCash()"><i class="fas fa-check"></i> Submit to Admin</button>
+      </div>
+    </div>
+
+    <!-- Break Timer -->
+    <div class="break-card">
+      <div class="break-row">
+        <div>
+          <div style="font-weight:800;font-size:14px;"><i class="fas fa-coffee" style="color:var(--orange);margin-right:6px;"></i>Break Timer</div>
+          <div style="font-size:11px;color:var(--gray);margin-top:2px;" id="break-status-txt">Break nahi chal rahi</div>
+        </div>
+        <div class="break-timer" id="break-timer">00:00</div>
+      </div>
+      <div class="break-btns">
+        <button class="break-btn break-start" id="break-start-btn" onclick="startBreak()"><i class="fas fa-pause"></i> Start Break</button>
+        <button class="break-btn break-end" id="break-end-btn" onclick="endBreak()" style="display:none;"><i class="fas fa-play"></i> End Break</button>
+      </div>
+    </div>
+
+    <!-- Announcements -->
+    <div class="announce-card" id="announce-card" style="display:none;">
+      <div style="font-weight:900;font-size:14px;margin-bottom:10px;">📢 Admin Announcements</div>
+      <div id="announce-list"></div>
+    </div>
+
+    <!-- Mood Check -->
+    <div class="mood-card">
+      <div style="font-weight:800;font-size:14px;"><i class="fas fa-smile" style="color:var(--orange);margin-right:6px;"></i>Aaj Ka Mood Kaisa Hai?</div>
+      <div class="mood-row" id="mood-row">
+        <span class="mood-btn" onclick="setMood('😴','Thaka hua')" title="Thaka hua">😴</span>
+        <span class="mood-btn" onclick="setMood('😐','Normal')" title="Normal">😐</span>
+        <span class="mood-btn" onclick="setMood('🙂','Theek hai')" title="Theek">🙂</span>
+        <span class="mood-btn" onclick="setMood('😄','Khush')" title="Khush">😄</span>
+        <span class="mood-btn" onclick="setMood('🔥','On Fire')" title="Energetic">🔥</span>
+      </div>
+    </div>
+
+    <div class="sec-title"><span>🔔</span> Mere Paas Aaye Orders</div>
+    <div id="new-orders-list"></div>
+    <div class="sec-title"><span>🚴</span> Meri Active Deliveries</div>
+    <div id="my-orders-list"></div>
+  </div>
+
+  <!-- ══ SCREEN: MAP ══ -->
+  <div class="screen" id="ss-map">
+    <div class="map-topbar">
+      <div class="map-topbar-title">
+        <i class="fas fa-map-marked-alt" style="color:var(--red);"></i>
+        Live Tracker Map
+      </div>
+      <div style="display:flex;gap:8px;">
+        <button onclick="centerMyLocation()" style="background:#eff6ff;border:none;border-radius:10px;padding:6px 12px;font-size:12px;font-weight:800;color:var(--blue);cursor:pointer;"><i class="fas fa-crosshairs"></i> Center</button>
+        <button onclick="shareCurrentLocation()" class="map-share-btn"><i class="fab fa-whatsapp"></i> Share</button>
+      </div>
+    </div>
+    <div id="full-map-container">
+      <div id="full-leaflet-map"></div>
+      <div id="full-map-placeholder" style="position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;background:#e8f0fe;pointer-events:none;gap:10px;">
+        <i class="fas fa-map-marker-alt" style="font-size:48px;color:#94a3b8;"></i>
+        <p style="font-size:13px;font-weight:700;color:#64748b;">Location ON karein map dekhne ke liye</p>
+        <button onclick="toggleLocation()" style="background:linear-gradient(135deg,var(--red-dark),var(--red));color:#fff;border:none;border-radius:12px;padding:10px 20px;font-size:13px;font-weight:800;cursor:pointer;pointer-events:all;">📍 Location ON Karein</button>
+      </div>
+      <div class="map-info-bar" id="map-info-bar" style="display:none;">
+        <div class="map-speed-badge">
+          <i class="fas fa-tachometer-alt" style="color:var(--green);"></i>
+          <span id="map-speed">0 km/h</span>
+        </div>
+        <div class="map-accuracy-badge" id="map-accuracy">Accuracy: --m</div>
+        <button class="map-share-btn" onclick="shareCurrentLocation()"><i class="fab fa-whatsapp"></i> Share</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══ SCREEN: EARNINGS ══ -->
+  <div class="screen" id="ss-earn">
+    <div class="earn-hero">
+      <p style="font-size:13px;opacity:.8;margin-bottom:4px;">Aaj Ki Kamai</p>
+      <h2 id="earn-today">₨0</h2>
+      <p style="font-size:12px;opacity:.7;margin-top:4px;" id="earn-date"></p>
+    </div>
+    <div class="earn-body">
+      <div class="earn-tabs">
+        <button class="earn-tab active" onclick="switchEarnTab('summary',this)">Summary</button>
+        <button class="earn-tab" onclick="switchEarnTab('history',this)">History</button>
+        <button class="earn-tab" onclick="switchEarnTab('checkin',this)">Log</button>
+      </div>
+      <div id="earn-tab-summary">
+        <div class="earn-row"><span class="earn-label"><i class="fas fa-motorcycle" style="color:var(--red);width:18px;"></i> Total Deliveries</span><span class="earn-val" id="e-deliveries">0</span></div>
+        <div class="earn-row"><span class="earn-label"><i class="fas fa-rupee-sign" style="color:var(--green);width:18px;"></i> Total Earnings</span><span class="earn-val" id="e-earnings">₨0</span></div>
+        <div class="earn-row"><span class="earn-label"><i class="fas fa-calendar-day" style="color:var(--blue);width:18px;"></i> Today Deliveries</span><span class="earn-val" id="e-today-del">0</span></div>
+        <div class="earn-row"><span class="earn-label"><i class="fas fa-road" style="color:var(--purple);width:18px;"></i> Distance Today</span><span class="earn-val" id="e-distance">0.0 km</span></div>
+        <div class="earn-row"><span class="earn-label"><i class="fas fa-star" style="color:var(--orange);width:18px;"></i> Rating</span><span class="earn-val" id="e-rating">⭐ 5.0</span></div>
+        <div class="earn-row"><span class="earn-label"><i class="fas fa-fire" style="color:var(--orange);width:18px;"></i> Streak</span><span class="earn-val" id="e-streak">0 🏆</span></div>
+        <div class="earn-row"><span class="earn-label"><i class="fas fa-coffee" style="color:var(--orange);width:18px;"></i> Break Time</span><span class="earn-val" id="e-break">0 min</span></div>
+      </div>
+      <div id="earn-tab-history" style="display:none;">
+        <div id="earn-history"><div class="empty-state"><i class="fas fa-history"></i><p>Koi history nahi abhi</p></div></div>
+      </div>
+      <div id="earn-tab-checkin" style="display:none;">
+        <div style="font-size:14px;font-weight:800;margin-bottom:12px;">📋 Aaj Ka Check-in Log</div>
+        <div id="checkin-log"><div class="empty-state"><i class="fas fa-clipboard-list"></i><p>Koi log nahi</p></div></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══ SCREEN: CHAT ══ -->
+  <div class="screen" id="ss-chat">
+    <div class="card" style="margin-bottom:0;border-radius:var(--radius) var(--radius) 0 0;border-bottom:1px solid #f0f0f0;padding:14px 16px;">
+      <div style="font-size:15px;font-weight:800;"><i class="fas fa-headset" style="color:var(--red);margin-right:6px;"></i>Admin Se Baat Karein</div>
+    </div>
+    <div class="chat-messages" id="staff-chat-msgs"></div>
+    <div class="chat-input-row">
+      <input type="text" id="staff-chat-input" placeholder="Message likhen..." onkeypress="if(event.key==='Enter')staffSendMsg()">
+      <button class="btn-send" onclick="staffSendMsg()"><i class="fas fa-paper-plane"></i></button>
+    </div>
+  </div>
+
+  <!-- ══ SCREEN: ADD DISH (manager) ══ -->
+  <div class="screen" id="ss-menu">
+    <div class="card dish-form">
+      <h3><i class="fas fa-plus-circle" style="color:var(--red);margin-right:6px;"></i>Menu Mein Dish Add Karein</h3>
+      <div class="fg"><label>Dish Ka Naam</label><input type="text" id="sdish-name" placeholder="e.g. BBQ Chicken Pizza"></div>
+      <div class="fg"><label>Price (Rs)</label><input type="number" id="sdish-price" placeholder="599"></div>
+      <div class="fg"><label>Discount %</label><input type="number" id="sdish-disc" placeholder="0"></div>
+      <div class="fg"><label>Category</label>
+        <select id="sdish-cat"><option>Pizza</option><option>Burger</option><option>Drink</option><option>Side</option><option>Dessert</option></select>
+      </div>
+      <div class="fg"><label>Description</label><textarea id="sdish-desc" rows="2" style="resize:none;" placeholder="Dish ki description..."></textarea></div>
+      <div class="fg"><label>Image Upload</label><input type="file" id="sdish-img-file" accept="image/*" style="padding:8px;border:2px solid #eef0f6;border-radius:10px;width:100%;font-size:13px;background:#f8fafc;"></div>
+      <div class="fg"><label>YA Image URL</label><input type="text" id="sdish-img" placeholder="https://..."></div>
+      <button class="btn-sm btn-green" style="width:100%;padding:14px;font-size:14px;border-radius:12px;" onclick="staffAddDish()">
+        <i class="fas fa-plus"></i> Dish Add Karein
+      </button>
+    </div>
+
+    <!-- Manager: Current Menu List (with delete) -->
+    <div style="padding:0 14px 14px;">
+      <div style="font-size:14px;font-weight:800;margin-bottom:10px;display:flex;align-items:center;gap:6px;">
+        <i class="fas fa-list" style="color:var(--red);"></i> Current Menu
+        <button onclick="managerLoadDishes()" style="margin-left:auto;background:#f3f4f6;border:none;border-radius:8px;padding:5px 10px;font-size:11px;font-weight:700;cursor:pointer;color:var(--gray);">
+          <i class="fas fa-sync"></i> Refresh
+        </button>
+      </div>
+      <div id="manager-dish-list"><div class="empty-state"><i class="fas fa-pizza-slice"></i><p>Refresh karein</p></div></div>
+    </div>
+
+    <!-- Manager: Open/Close Restaurant Toggle -->
+    <div class="card" style="margin:0 14px 12px;">
+      <h3 style="margin-bottom:12px;"><i class="fas fa-store" style="color:var(--orange);margin-right:6px;"></i>Restaurant Status</h3>
+      <div style="display:flex;align-items:center;justify-content:space-between;">
+        <div>
+          <div id="mgr-store-status" style="font-weight:800;font-size:14px;color:var(--green);">🟢 Open</div>
+          <div style="font-size:11px;color:var(--gray);margin-top:2px;">Customers order kar sakte hain</div>
+        </div>
+        <label class="toggle-switch">
+          <input type="checkbox" id="mgr-store-toggle" checked onchange="managerToggleStore(this.checked)">
+          <span class="toggle-slider"></span>
+        </label>
+      </div>
+    </div>
+
+    <!-- Manager: Announcements -->
+    <div class="card" style="margin:0 14px 12px;">
+      <h3 style="margin-bottom:12px;"><i class="fas fa-bullhorn" style="color:var(--blue);margin-right:6px;"></i>Announcement Bhejein</h3>
+      <textarea id="mgr-announce-txt" rows="2" style="resize:none;width:100%;padding:10px;border:2px solid #eef0f6;border-radius:10px;font-size:13px;font-family:'Nunito',sans-serif;outline:none;" placeholder="Staff ke liye message..."></textarea>
+      <button class="btn-sm btn-blue" style="width:100%;margin-top:8px;padding:12px;border-radius:12px;font-size:13px;" onclick="managerSendAnnouncement()">
+        <i class="fas fa-paper-plane"></i> Send Announcement
+      </button>
+    </div>
+  </div>
+
+  <!-- ══ SCREEN: PROFILE ══ -->
+  <div class="screen" id="ss-profile">
+    <div class="profile-hero">
+      <div class="profile-avatar" id="profile-avatar">👤</div>
+      <h2 id="profile-name-s" style="font-size:20px;font-weight:900;">Staff Member</h2>
+      <p id="profile-role-s" style="font-size:13px;opacity:.8;margin-top:3px;">Delivery Boy</p>
+      <div style="display:flex;gap:8px;justify-content:center;margin-top:14px;">
+        <div style="background:rgba(255,255,255,0.2);border-radius:12px;padding:8px 16px;text-align:center;">
+          <div style="font-size:18px;font-weight:900;" id="p-rating-big">5.0</div>
+          <div style="font-size:10px;opacity:.8;">Rating</div>
+        </div>
+        <div style="background:rgba(255,255,255,0.2);border-radius:12px;padding:8px 16px;text-align:center;">
+          <div style="font-size:18px;font-weight:900;" id="p-level">🥉</div>
+          <div style="font-size:10px;opacity:.8;">Level</div>
+        </div>
+        <div style="background:rgba(255,255,255,0.2);border-radius:12px;padding:8px 16px;text-align:center;">
+          <div style="font-size:18px;font-weight:900;" id="p-badge">New</div>
+          <div style="font-size:10px;opacity:.8;">Badge</div>
+        </div>
+      </div>
+    </div>
+    <div class="profile-body">
+      <div class="profile-row"><span class="profile-label"><i class="fas fa-motorcycle" style="color:var(--red);"></i> Deliveries</span><span class="profile-val" id="p-deliveries">0</span></div>
+      <div class="profile-row"><span class="profile-label"><i class="fas fa-rupee-sign" style="color:var(--green);"></i> Earnings</span><span class="profile-val" id="p-earnings">₨0</span></div>
+      <div class="profile-row"><span class="profile-label"><i class="fas fa-circle" style="color:var(--green);"></i> Status</span><span class="profile-val" id="p-status" style="color:var(--green);">Active</span></div>
+      <div class="profile-row"><span class="profile-label"><i class="fas fa-star" style="color:var(--orange);"></i> Rating</span><span class="profile-val" id="e-rating-p">⭐ 5.0</span></div>
+      <div class="profile-row"><span class="profile-label"><i class="fas fa-phone" style="color:var(--blue);"></i> Phone</span><span class="profile-val" id="p-phone">-</span></div>
+      <div class="profile-row"><span class="profile-label"><i class="fas fa-road" style="color:var(--purple);"></i> Total Distance</span><span class="profile-val" id="p-total-dist">0 km</span></div>
+
+      <!-- Achievement Badges -->
+      <div style="margin-top:16px;">
+        <div style="font-size:13px;font-weight:800;margin-bottom:10px;">🏅 Achievements</div>
+        <div id="achievements-row" style="display:flex;flex-wrap:wrap;gap:8px;"></div>
+      </div>
+
+      <div style="margin-top:16px;">
+        <a href="https://wa.me/923076120333" target="_blank" style="display:flex;align-items:center;gap:10px;background:#d1fae5;color:#065f46;padding:14px;border-radius:14px;text-decoration:none;font-weight:800;font-size:14px;">
+          <i class="fab fa-whatsapp" style="font-size:22px;"></i>Admin Se WhatsApp Par Baat Karein
+        </a>
+      </div>
+      <button onclick="staffLogout()" style="width:100%;margin-top:12px;padding:14px;background:#fee2e2;color:#dc2626;border:none;border-radius:14px;font-size:14px;font-weight:800;cursor:pointer;font-family:'Nunito',sans-serif;">
+        <i class="fas fa-sign-out-alt"></i> Logout
+      </button>
+    </div>
+  </div>
+
+  <!-- ══ DELIVERY COMPLETE EARNINGS POPUP ══ -->
+  <div id="delivery-earn-modal">
+    <div class="earn-sheet">
+      <div class="earn-sheet-handle"></div>
+      <div class="earn-confetti-row">🎉 🛵 💰 🎊</div>
+      <div class="earn-sheet-title">Delivery Mukammal!</div>
+      <div class="earn-sheet-sub" id="earn-popup-order-info">Order #000000</div>
+      <div class="earn-big-amount">
+        <div class="amount-num earn-amount-anim" id="earn-popup-fee">₨0</div>
+        <div class="amount-label">Is Delivery Se Aapki Kamai</div>
+      </div>
+      <div class="earn-stats-grid">
+        <div class="earn-stat-box">
+          <div class="stat-num" id="earn-popup-total-del">0</div>
+          <div class="stat-lbl">Aaj Ki Deliveries</div>
+        </div>
+        <div class="earn-stat-box">
+          <div class="stat-num" id="earn-popup-total-earn">₨0</div>
+          <div class="stat-lbl">Total Kamai</div>
+        </div>
+        <div class="earn-stat-box">
+          <div class="stat-num" id="earn-popup-streak">0🔥</div>
+          <div class="stat-lbl">Streak</div>
+        </div>
+      </div>
+      <div class="earn-sheet-btns">
+        <button class="earn-sheet-btn earn-btn-send" onclick="sendEarningsToAdmin()"><i class="fab fa-whatsapp"></i> Admin Ko Bhejo</button>
+        <button class="earn-sheet-btn earn-btn-close" onclick="closeEarnModal()"><i class="fas fa-check"></i> OK</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- BOTTOM NAV -->
+  <nav class="bottom-nav">
+    <button class="nav-item active" onclick="showStaffScreen('ss-orders',this)">
+      <i class="fas fa-home"></i><span>Home</span>
+      <span class="nav-badge" id="nav-pending-badge" style="display:none;">0</span>
+    </button>
+    <button class="nav-item delivery-only" onclick="showStaffScreen('ss-map',this)">
+      <i class="fas fa-map-marked-alt"></i><span>Map</span>
+    </button>
+    <button class="nav-item" onclick="showStaffScreen('ss-earn',this)">
+      <i class="fas fa-wallet"></i><span>Earnings</span>
+    </button>
+    <button class="nav-item" onclick="showStaffScreen('ss-chat',this)">
+      <i class="fas fa-comments"></i><span>Chat</span>
+      <span class="nav-badge" id="nav-chat-badge" style="display:none;">!</span>
+    </button>
+    <button class="nav-item" id="nav-menu-btn" onclick="showStaffScreen('ss-menu',this)" style="display:none;">
+      <i class="fas fa-pizza-slice"></i><span>Menu</span>
+    </button>
+    <button class="nav-item" onclick="showStaffScreen('ss-profile',this)">
+      <i class="fas fa-user-circle"></i><span>Profile</span>
+    </button>
+  </nav>
+</div>
+
+<!-- FIREBASE -->
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
+
+<script>
+// ── FIREBASE INIT ──
+(function() {
+  const cfg = {
+    apiKey: "AIzaSyC4FhsglJrFA4lb0DfaJr_PkSRijpFoY3w",
+    authDomain: "oven-bake-pizza-bhera.firebaseapp.com",
+    projectId: "oven-bake-pizza-bhera",
+    storageBucket: "oven-bake-pizza-bhera.firebasestorage.app",
+    messagingSenderId: "986440791535",
+    appId: "1:986440791535:web:3c26194ac355126a31321a"
+  };
+  firebase.initializeApp(cfg);
+  window._db = firebase.firestore();
+})();
+</script>
+
+<script>
+// ══════════════════════════════════════════════════════
+//  GLOBALS
+// ══════════════════════════════════════════════════════
+let staffData = null;
+let locationTracking = false, locationWatchId = null;
+let isOnline = false;
+let notifiedOrderIds = new Set();
+let _allDeliveryStaff = [];
+let _autoRotateTimers = {};
+let _currentModalOrder = null;
+let _modalTimer = null;
+let _alertInterval = null, _alertAudioCtx = null;
+let _myLat = null, _myLng = null;
+let _mySpeed = 0, _maxSpeed = 0, _totalDistance = 0, _lastLat = null, _lastLng = null;
+let _drivingSeconds = 0, _drivingTimer = null;
+let _breakActive = false, _breakSeconds = 0, _breakTimer = null, _totalBreakSeconds = 0;
+let _todayDeliveries = 0, _streakCount = 0, _bestStreak = 0;
+let _cashTotal = 0, _cashOrders = 0;
+let _myAccuracy = null;
+
+// ── Leaflet maps ──
+let _miniMap = null, _miniMarker = null;
+let _fullMap = null, _fullMarker = null;
+
+// ══════════════════════════════════════════════════════
+//  TOAST & TIP
+// ══════════════════════════════════════════════════════
+function showToast(msg, dur = 2800) {
+  const t = document.getElementById('toast');
+  t.textContent = msg; t.classList.add('show');
+  clearTimeout(t._tid);
+  t._tid = setTimeout(() => t.classList.remove('show'), dur);
+}
+function showTip(msg, dur = 4000) {
+  const t = document.getElementById('tip-popup');
+  t.innerHTML = '💡 ' + msg; t.classList.add('show');
+  clearTimeout(t._tid);
+  t._tid = setTimeout(() => t.classList.remove('show'), dur);
+}
+
+// ══════════════════════════════════════════════════════
+//  SOUND & VIBRATION
+// ══════════════════════════════════════════════════════
+function startOrderAlert() {
+  stopOrderAlert(); _doAlertCycle();
+  _alertInterval = setInterval(_doAlertCycle, 3000);
+  requestNotificationPermission();
+}
+function stopOrderAlert() {
+  if (_alertInterval) { clearInterval(_alertInterval); _alertInterval = null; }
+  if (navigator.vibrate) navigator.vibrate(0);
+}
+function _doAlertCycle() {
+  if (navigator.vibrate) navigator.vibrate([800, 200, 800, 200, 800]);
+  try {
+    if (!_alertAudioCtx) _alertAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    const ctx = _alertAudioCtx;
+    [0, 0.35, 0.7, 1.0].forEach(t => {
+      const osc = ctx.createOscillator(); const gain = ctx.createGain();
+      osc.connect(gain); gain.connect(ctx.destination);
+      osc.type = 'sine'; osc.frequency.value = 900;
+      gain.gain.setValueAtTime(0.6, ctx.currentTime + t);
+      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + t + 0.28);
+      osc.start(ctx.currentTime + t); osc.stop(ctx.currentTime + t + 0.3);
+    });
+  } catch(e) {}
+}
+function requestNotificationPermission() {
+  if ('Notification' in window && Notification.permission === 'default') {
+    Notification.requestPermission().then(perm => {
+      if (perm === 'granted') showToast('🔔 Notifications ON! Background mein bhi milenge.');
+    });
+  }
+}
+
+function showLocalNotification(title, body, orderId) {
+  // Always vibrate strongly when new order
+  if (navigator.vibrate) navigator.vibrate([1000, 300, 1000, 300, 1000, 300, 1000]);
+
+  if (!('Notification' in window) || Notification.permission !== 'granted') return;
+
+  const icon = 'https://cdn.phototourl.com/free/2026-05-18-dc007e3d-8822-4995-a527-b247c54a17a2.png';
+
+  // If page is hidden (background), ask SW to show the notification
+  if (document.visibilityState === 'hidden' && navigator.serviceWorker && window._swReg) {
+    navigator.serviceWorker.ready.then(sw => {
+      sw.active && sw.active.postMessage({
+        type: 'SHOW_NOTIFICATION', title, body, orderId
+      });
+    });
+    return;
+  }
+
+  // Use Service Worker notification (works in background + lock screen)
+  if (navigator.serviceWorker && window._swReg) {
+    window._swReg.showNotification(title, {
+      body, icon,
+      badge: icon,
+      vibrate: [500, 200, 500, 200, 500],
+      requireInteraction: true,
+      tag: 'order-' + (orderId || 'new'),
+      renotify: true,
+      actions: [
+        { action: 'accept', title: '✅ Accept' },
+        { action: 'view',   title: '👀 Dekho' }
+      ],
+      data: { url: window.location.href, orderId }
+    }).catch(() => {
+      try { new Notification(title, { body, icon }); } catch(e) {}
+    });
+  } else {
+    try { new Notification(title, { body, icon }); } catch(e) {}
+  }
+}
+
+// ══════════════════════════════════════════════════════
+//  SCREEN NAV
+// ══════════════════════════════════════════════════════
+function showStaffScreen(id, btn) {
+  document.querySelectorAll('.screen').forEach(s => { s.classList.remove('active'); s.style.display = 'none'; });
+  document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+  const target = document.getElementById(id);
+  if (target) { target.style.display = 'block'; target.classList.add('active'); }
+  if (btn) btn.classList.add('active');
+  if (id === 'ss-earn') updateEarningsScreen();
+  if (id === 'ss-map') {
+    setTimeout(() => {
+      if (_fullMap) _fullMap.invalidateSize();
+      if (_miniMap) _miniMap.invalidateSize();
+    }, 120);
+  }
+}
+
+// ══════════════════════════════════════════════════════
+//  LEAFLET MAP HELPERS
+// ══════════════════════════════════════════════════════
+function _makeBikeIcon(size = 36) {
+  return L.divIcon({
+    className: '',
+    html: `<div style="width:${size}px;height:${size}px;background:linear-gradient(135deg,#c1121f,#e63946);border-radius:50% 50% 50% 0;transform:rotate(-45deg);border:3px solid #fff;box-shadow:0 4px 16px rgba(0,0,0,0.4);display:flex;align-items:center;justify-content:center;"><div style="transform:rotate(45deg);font-size:${size*0.4}px;">🛵</div></div>`,
+    iconSize: [size, size], iconAnchor: [size / 2, size]
+  });
+}
+
+function _initMiniMap(lat, lng) {
+  const container = document.getElementById('loc-map-frame');
+  if (_miniMap) {
+    _miniMap.setView([lat, lng], 16);
+    if (_miniMarker) _miniMarker.setLatLng([lat, lng]);
+    return;
+  }
+  _miniMap = L.map(container, { zoomControl: false, attributionControl: false }).setView([lat, lng], 16);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19 }).addTo(_miniMap);
+  _miniMarker = L.marker([lat, lng], { icon: _makeBikeIcon(34) }).addTo(_miniMap);
+  setTimeout(() => _miniMap.invalidateSize(), 250);
+}
+
+function _initFullMap(lat, lng) {
+  document.getElementById('full-map-placeholder').style.display = 'none';
+  document.getElementById('map-info-bar').style.display = 'flex';
+  if (_fullMap) {
+    _fullMap.setView([lat, lng], 16);
+    if (_fullMarker) _fullMarker.setLatLng([lat, lng]);
+    return;
+  }
+  _fullMap = L.map('full-leaflet-map', { zoomControl: true }).setView([lat, lng], 16);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    maxZoom: 19, attribution: '© OpenStreetMap'
+  }).addTo(_fullMap);
+  _fullMarker = L.marker([lat, lng], { icon: _makeBikeIcon(44) }).addTo(_fullMap)
+    .bindPopup('<b>📍 Meri Live Location</b><br><small>Real-time update ho rahi hai</small>').openPopup();
+  setTimeout(() => _fullMap.invalidateSize(), 300);
+}
+
+function centerMyLocation() {
+  if (!_myLat) return showToast('📍 Pehle location ON karein');
+  if (_fullMap) _fullMap.setView([_myLat, _myLng], 17);
+}
+
+// ══════════════════════════════════════════════════════
+//  UPDATE MAP UI — MAIN FUNCTION (FIXED)
+// ══════════════════════════════════════════════════════
+function updateMapUI(lat, lng, speed, accuracy) {
+  // ── Badge & Status ──
+  const locBadge = document.getElementById('loc-badge');
+  const locCard = document.getElementById('loc-card');
+  const locStatus = document.getElementById('loc-status');
+  const locMap = document.getElementById('loc-map');
+  const locCoords = document.getElementById('loc-coords');
+  const locToggleBtn = document.getElementById('loc-toggle-btn');
+  const onlineBadge = document.getElementById('online-badge');
+
+  locBadge.textContent = '● LIVE';
+  locBadge.style.background = '#d1fae5';
+  locBadge.style.color = '#059669';
+  locCard.classList.add('loc-live');
+  locStatus.textContent = '● Live Location ON – Tracking active';
+  locStatus.className = 'loc-status loc-on';
+  locMap.style.display = 'block';
+
+  // Sync the power toggle checkbox
+  const locPowerToggle = document.getElementById('loc-power-toggle');
+  if (locPowerToggle) locPowerToggle.checked = true;
+
+  // ── TOP BAR BUTTON GREEN ──
+  locToggleBtn.classList.add('loc-active');
+
+  // ── Coords display ──
+  locCoords.style.display = 'flex';
+  locCoords.innerHTML = `<span>📍 ${lat.toFixed(5)}, ${lng.toFixed(5)}</span><span style="color:var(--green);font-weight:800;">🟢 GPS Active</span>`;
+
+  // ── Mini map init/update ──
+  _initMiniMap(lat, lng);
+
+  // ── Full map init/update ──
+  _initFullMap(lat, lng);
+
+  // ── Speed display ──
+  const kmh = speed ? Math.round(speed * 3.6) : 0;
+  _mySpeed = kmh;
+  if (kmh > _maxSpeed) _maxSpeed = kmh;
+  document.getElementById('speed-card').style.display = 'flex';
+  document.getElementById('speed-val').textContent = kmh;
+  document.getElementById('speed-max').textContent = _maxSpeed;
+
+  // ── Map speed & accuracy bar ──
+  document.getElementById('map-speed').textContent = kmh + ' km/h';
+  if (accuracy) {
+    _myAccuracy = Math.round(accuracy);
+    document.getElementById('map-accuracy').textContent = 'Accuracy: ±' + _myAccuracy + 'm';
+  }
+
+  // ── Distance tracking ──
+  if (_lastLat && _lastLng) {
+    const d = _haversine(_lastLat, _lastLng, lat, lng);
+    if (d < 0.5) { // filter GPS jumps
+      _totalDistance += d;
+      document.getElementById('dist-today').textContent = _totalDistance.toFixed(1);
+      document.getElementById('e-distance').textContent = _totalDistance.toFixed(1) + ' km';
+      document.getElementById('p-total-dist').textContent = _totalDistance.toFixed(1) + ' km';
+    }
+  }
+  _lastLat = lat; _lastLng = lng;
+
+  // ── Weather fetch (once) ──
+  if (!window._weatherFetched) { window._weatherFetched = true; fetchWeather(lat, lng); }
+}
+
+function _haversine(lat1, lon1, lat2, lon2) {
+  const R = 6371;
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLon = (lon2 - lon1) * Math.PI / 180;
+  const a = Math.sin(dLat/2)*Math.sin(dLat/2) +
+    Math.cos(lat1*Math.PI/180)*Math.cos(lat2*Math.PI/180)*
+    Math.sin(dLon/2)*Math.sin(dLon/2);
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+}
+
+// ══════════════════════════════════════════════════════
+//  GPS PERMISSION SYSTEM
+// ══════════════════════════════════════════════════════
+function _gpsShowStep(step) {
+  ['ask','searching','success','denied'].forEach(s =>
+    document.getElementById('gps-step-' + s).classList.remove('active'));
+  ['gps-ask-btns','gps-success-btns','gps-denied-btns'].forEach(id => {
+    const el = document.getElementById(id); if (el) el.style.display = 'none';
+  });
+  document.getElementById('gps-step-' + step).classList.add('active');
+  if (step === 'ask') document.getElementById('gps-ask-btns').style.display = 'flex';
+  if (step === 'success') { document.getElementById('gps-success-btns').style.display = 'flex'; setTimeout(gpsClose, 2500); }
+  if (step === 'denied') { _gpsInjectBrowserGuide(); document.getElementById('gps-denied-btns').style.display = 'flex'; }
+}
+
+function _gpsInjectBrowserGuide() {
+  const ua = navigator.userAgent;
+  const container = document.getElementById('gps-browser-guide');
+  let steps = [];
+  if (/iPhone|iPad|iPod/.test(ua)) {
+    steps = [
+      { num:'1', text:'<b>Settings</b> app kholein (grey gear icon)' },
+      { num:'2', text:'<span>Privacy & Security</span> → <span>Location Services</span>' },
+      { num:'3', text:'<span>Location Services</span> ON karein' },
+      { num:'4', text:'<span>Safari</span> → <span>While Using the App</span>' },
+      { num:'5', text:'Wapas aayein → "Dobara Try" dabayein' },
+    ];
+  } else if (/Android/.test(ua)) {
+    steps = [
+      { num:'0', text:'⚡ Phone Settings → <span>Location</span> ON karein' },
+      { num:'1', text:'Browser address bar → lock icon 🔒 dabayein' },
+      { num:'2', text:'<span>Permissions</span> → <span>Location</span> → <span>Allow</span>' },
+      { num:'3', text:'"Dobara Try" dabayein' },
+    ];
+  } else {
+    steps = [
+      { num:'1', text:'Browser address bar → lock icon 🔒 dabayein' },
+      { num:'2', text:'<span>Location / Site Permissions</span> → <span>Allow</span>' },
+      { num:'3', text:'"Dobara Try" dabayein' },
+    ];
+  }
+  container.innerHTML = steps.map(s => `
+    <div class="gps-guide-step">
+      <div class="gps-guide-num">${s.num}</div>
+      <div class="gps-guide-txt">${s.text}</div>
+    </div>`).join('');
+}
+
+function showGpsModal() {
+  document.getElementById('gps-modal').classList.add('show');
+  _gpsShowStep('ask');
+}
+function gpsSkip() {
+  document.getElementById('gps-modal').classList.remove('show');
+  localStorage.setItem('gpsDismissed', Date.now());
+}
+function gpsClose() {
+  document.getElementById('gps-modal').classList.remove('show');
+}
+function gpsRetry() { _gpsShowStep('searching'); _doGpsRequest(); }
+function gpsRequestNow() { _gpsShowStep('searching'); setTimeout(_doGpsRequest, 350); }
+
+function _doGpsRequest() {
+  if (!navigator.geolocation) { _gpsShowStep('denied'); return; }
+  // On mobile, try to wake up GPS with permissive options first, then high accuracy
+  navigator.geolocation.getCurrentPosition(
+    (pos) => {
+      _myLat = pos.coords.latitude;
+      _myLng = pos.coords.longitude;
+      locationTracking = true;
+      localStorage.removeItem('gpsDismissed');
+      pushLocationToFirestore(_myLat, _myLng);
+      updateMapUI(_myLat, _myLng, pos.coords.speed, pos.coords.accuracy);
+      _startDrivingTimer();
+      // Show success with coordinates
+      const coordTxt = document.getElementById('gps-success-coords');
+      if (coordTxt) coordTxt.textContent = `📍 ${_myLat.toFixed(5)}, ${_myLng.toFixed(5)}`;
+      _gpsShowStep('success');
+      // Start continuous watching
+      if (locationWatchId) navigator.geolocation.clearWatch(locationWatchId);
+      locationWatchId = navigator.geolocation.watchPosition(
+        async (p) => {
+          _myLat = p.coords.latitude; _myLng = p.coords.longitude;
+          await pushLocationToFirestore(_myLat, _myLng);
+          updateMapUI(_myLat, _myLng, p.coords.speed, p.coords.accuracy);
+        },
+        () => {},
+        { enableHighAccuracy: true, maximumAge: 5000, timeout: 30000 }
+      );
+    },
+    (err) => {
+      locationTracking = false;
+      if (err.code === 1) {
+        // PERMISSION_DENIED
+        _gpsShowStep('denied');
+      } else if (err.code === 2 || err.code === 3) {
+        // POSITION_UNAVAILABLE or TIMEOUT — try with low accuracy as fallback
+        navigator.geolocation.getCurrentPosition(
+          (pos) => {
+            _myLat = pos.coords.latitude;
+            _myLng = pos.coords.longitude;
+            locationTracking = true;
+            localStorage.removeItem('gpsDismissed');
+            pushLocationToFirestore(_myLat, _myLng);
+            updateMapUI(_myLat, _myLng, pos.coords.speed, pos.coords.accuracy);
+            _startDrivingTimer();
+            const coordTxt = document.getElementById('gps-success-coords');
+            if (coordTxt) coordTxt.textContent = `📍 ${_myLat.toFixed(5)}, ${_myLng.toFixed(5)}`;
+            _gpsShowStep('success');
+            if (locationWatchId) navigator.geolocation.clearWatch(locationWatchId);
+            locationWatchId = navigator.geolocation.watchPosition(
+              async (p) => {
+                _myLat = p.coords.latitude; _myLng = p.coords.longitude;
+                await pushLocationToFirestore(_myLat, _myLng);
+                updateMapUI(_myLat, _myLng, p.coords.speed, p.coords.accuracy);
+              },
+              () => {},
+              { enableHighAccuracy: false, maximumAge: 10000, timeout: 30000 }
+            );
+          },
+          () => { _gpsShowStep('denied'); },
+          { enableHighAccuracy: false, timeout: 20000, maximumAge: 60000 }
+        );
+      }
+    },
+    { enableHighAccuracy: true, timeout: 12000, maximumAge: 0 }
+  );
+}
+
+// ══════════════════════════════════════════════════════
+//  AUTO-START LOCATION (silently, no permission modal)
+// ══════════════════════════════════════════════════════
+function _autoStartLocation() {
+  if (locationTracking) return; // already on
+  if (!navigator.geolocation) return;
+  // Try silently — if browser grants, great. If denied, show denied UI in loc card only (no modal).
+  navigator.geolocation.getCurrentPosition(
+    (pos) => {
+      _myLat = pos.coords.latitude;
+      _myLng = pos.coords.longitude;
+      locationTracking = true;
+      localStorage.removeItem('gpsDismissed');
+      pushLocationToFirestore(_myLat, _myLng);
+      updateMapUI(_myLat, _myLng, pos.coords.speed, pos.coords.accuracy);
+      _startDrivingTimer();
+      // Start continuous watching
+      if (locationWatchId) navigator.geolocation.clearWatch(locationWatchId);
+      locationWatchId = navigator.geolocation.watchPosition(
+        async (p) => {
+          _myLat = p.coords.latitude; _myLng = p.coords.longitude;
+          await pushLocationToFirestore(_myLat, _myLng);
+          updateMapUI(_myLat, _myLng, p.coords.speed, p.coords.accuracy);
+        },
+        () => {},
+        { enableHighAccuracy: true, maximumAge: 5000, timeout: 30000 }
+      );
+      showToast('📍 Live Location ON ho gayi!', 2500);
+    },
+    (err) => {
+      locationTracking = false;
+      if (err.code === 1) {
+        // Permission denied — update loc card badge only, no annoying modal
+        const badge = document.getElementById('loc-badge');
+        if (badge) { badge.textContent = '⚠️ Allow Karein'; badge.style.background = '#fef3c7'; badge.style.color = '#d97706'; }
+        const locStatus = document.getElementById('loc-status');
+        if (locStatus) { locStatus.textContent = '⚠️ Location permission nahi di'; locStatus.className = 'loc-status loc-off'; }
+      } else {
+        // Timeout/unavailable — retry once with low accuracy
+        navigator.geolocation.getCurrentPosition(
+          (pos) => {
+            _myLat = pos.coords.latitude; _myLng = pos.coords.longitude;
+            locationTracking = true;
+            localStorage.removeItem('gpsDismissed');
+            pushLocationToFirestore(_myLat, _myLng);
+            updateMapUI(_myLat, _myLng, pos.coords.speed, pos.coords.accuracy);
+            _startDrivingTimer();
+            if (locationWatchId) navigator.geolocation.clearWatch(locationWatchId);
+            locationWatchId = navigator.geolocation.watchPosition(
+              async (p) => {
+                _myLat = p.coords.latitude; _myLng = p.coords.longitude;
+                await pushLocationToFirestore(_myLat, _myLng);
+                updateMapUI(_myLat, _myLng, p.coords.speed, p.coords.accuracy);
+              },
+              () => {},
+              { enableHighAccuracy: false, maximumAge: 10000, timeout: 30000 }
+            );
+            showToast('📍 Live Location ON ho gayi!', 2500);
+          },
+          () => {},
+          { enableHighAccuracy: false, timeout: 20000, maximumAge: 60000 }
+        );
+      }
+    },
+    { enableHighAccuracy: true, timeout: 12000, maximumAge: 0 }
+  );
+}
+
+function showLocPermissionModal() {
+  const dismissed = localStorage.getItem('gpsDismissed');
+  if (dismissed && Date.now() - parseInt(dismissed) < 30 * 60 * 1000) return;
+  showGpsModal();
+}
+function closeLocModal(allow) { if (allow) gpsRequestNow(); else gpsSkip(); }
+
+// ══════════════════════════════════════════════════════
+//  ONLINE/OFFLINE TOGGLE
+// ══════════════════════════════════════════════════════
+function handleOnlineToggle(checked) {
+  isOnline = checked;
+  const badge = document.getElementById('online-badge');
+  const locStatus = document.getElementById('loc-status');
+  const locBadge = document.getElementById('loc-badge');
+  const onlineTxt = document.getElementById('online-txt');
+  const toggleCard = document.getElementById('online-toggle-card');
+
+  if (checked) {
+    badge.classList.add('online');
+    onlineTxt.textContent = 'Online';
+    toggleCard.classList.add('is-online');
+    locStatus.textContent = '● Online – Orders milenge';
+    locStatus.className = 'loc-status loc-on';
+    if (staffData) firebase.firestore().collection('staff').doc(staffData.id).update({ online: true }).catch(() => {});
+    showToast('✅ Aap Online ho gaye! Orders milenge.');
+    if (!locationTracking) _autoStartLocation();
+    _logCheckin('check-in');
+  } else {
+    badge.classList.remove('online');
+    onlineTxt.textContent = 'Offline';
+    toggleCard.classList.remove('is-online');
+    if (!locationTracking) {
+      locStatus.textContent = '● Offline – Orders nahi milenge';
+      locStatus.className = 'loc-status loc-off';
+    }
+    locBadge.textContent = 'OFF'; locBadge.style.background = '#fee2e2'; locBadge.style.color = 'var(--red)';
+    if (staffData) firebase.firestore().collection('staff').doc(staffData.id).update({ online: false }).catch(() => {});
+    showToast('⚫ Aap Offline ho gaye');
+    _logCheckin('check-out');
+  }
+}
+function toggleOnlineStatus() {
+  const chk = document.getElementById('online-toggle-chk');
+  chk.checked = !chk.checked;
+  handleOnlineToggle(chk.checked);
+}
+
+// ══════════════════════════════════════════════════════
+//  LOCATION TOGGLE BUTTON (top bar)
+// ══════════════════════════════════════════════════════
+function toggleLocation() {
+  if (locationTracking) {
+    // Turn OFF
+    if (locationWatchId) { navigator.geolocation.clearWatch(locationWatchId); locationWatchId = null; }
+    locationTracking = false;
+    _myLat = null; _myLng = null;
+    document.getElementById('loc-status').textContent = isOnline ? '● Online – Orders milenge' : '● Offline – Orders nahi milenge';
+    document.getElementById('loc-status').className = 'loc-status ' + (isOnline ? 'loc-on' : 'loc-off');
+    document.getElementById('loc-badge').textContent = 'OFF';
+    document.getElementById('loc-badge').style.background = '#fee2e2';
+    document.getElementById('loc-badge').style.color = 'var(--red)';
+    document.getElementById('loc-map').style.display = 'none';
+    document.getElementById('loc-coords').style.display = 'none';
+    document.getElementById('loc-toggle-btn').classList.remove('loc-active');
+    document.getElementById('loc-card').classList.remove('loc-live');
+    document.getElementById('speed-card').style.display = 'none';
+    document.getElementById('full-map-placeholder').style.display = 'flex';
+    document.getElementById('map-info-bar').style.display = 'none';
+    _stopDrivingTimer();
+    // Sync card toggle
+    const lpt = document.getElementById('loc-power-toggle');
+    if (lpt) lpt.checked = false;
+    showToast('⚫ Location tracking band ho gayi');
+  } else {
+    _autoStartLocation();
+  }
+}
+
+// ══════════════════════════════════════════════════════
+//  LOCATION POWER TOGGLE (card switch)
+// ══════════════════════════════════════════════════════
+function handleLocPowerToggle(checked) {
+  if (checked) {
+    // Turn ON location
+    if (!locationTracking) _autoStartLocation();
+  } else {
+    // Turn OFF location
+    if (locationWatchId) { navigator.geolocation.clearWatch(locationWatchId); locationWatchId = null; }
+    locationTracking = false;
+    _myLat = null; _myLng = null;
+    const locStatus = document.getElementById('loc-status');
+    const locBadge = document.getElementById('loc-badge');
+    locStatus.textContent = isOnline ? '● Online – Orders milenge' : '● Offline – Orders nahi milenge';
+    locStatus.className = 'loc-status ' + (isOnline ? 'loc-on' : 'loc-off');
+    locBadge.textContent = 'OFF';
+    locBadge.style.background = '#fee2e2';
+    locBadge.style.color = 'var(--red)';
+    document.getElementById('loc-map').style.display = 'none';
+    document.getElementById('loc-coords').style.display = 'none';
+    document.getElementById('loc-toggle-btn').classList.remove('loc-active');
+    document.getElementById('loc-card').classList.remove('loc-live');
+    document.getElementById('speed-card').style.display = 'none';
+    const fmp = document.getElementById('full-map-placeholder');
+    if (fmp) fmp.style.display = 'flex';
+    const mib = document.getElementById('map-info-bar');
+    if (mib) mib.style.display = 'none';
+    _stopDrivingTimer();
+    showToast('⚫ Location tracking band ho gayi');
+  }
+}
+
+
+async function pushLocationToFirestore(lat, lng) {
+  if (!staffData) return;
+  try {
+    await firebase.firestore().collection('staffLocations').doc(staffData.id).set({
+      staffId: staffData.id, staffName: staffData.name,
+      lat, lng, updatedAt: firebase.firestore.FieldValue.serverTimestamp(), online: isOnline
+    });
+  } catch(e) {}
+}
+
+// ══════════════════════════════════════════════════════
+//  SHARE LOCATION
+// ══════════════════════════════════════════════════════
+window.shareCurrentLocation = function() {
+  if (!_myLat || !_myLng) return showToast('📍 Location abhi available nahi');
+  const url = `https://maps.google.com/maps?q=${_myLat},${_myLng}`;
+  const text = `🛵 Oven Bake Pizza - Delivery Boy ki Live Location:\n📍 ${url}`;
+  if (navigator.share) {
+    navigator.share({ title: 'Meri Live Location', text, url }).catch(() =>
+      window.open(`https://wa.me/?text=${encodeURIComponent(text)}`, '_blank'));
+  } else {
+    window.open(`https://wa.me/?text=${encodeURIComponent(text)}`, '_blank');
+  }
+};
+
+// ══════════════════════════════════════════════════════
+//  FEATURE 1: WEATHER
+// ══════════════════════════════════════════════════════
+async function fetchWeather(lat, lng) {
+  try {
+    const res = await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lng}&current_weather=true&hourly=temperature_2m,relativehumidity_2m,apparent_temperature`);
+    const data = await res.json();
+    const w = data.current_weather;
+    const h = data.hourly;
+    const card = document.getElementById('weather-card');
+    card.style.display = 'flex';
+    const temp = Math.round(w.temperature);
+    const windspeed = Math.round(w.windspeed);
+    const codeMap = { 0:'☀️', 1:'🌤️', 2:'⛅', 3:'☁️', 45:'🌫️', 48:'🌫️', 51:'🌦️', 61:'🌧️', 71:'❄️', 80:'🌧️', 95:'⛈️' };
+    const descMap = { 0:'Saaf Mausam', 1:'Mostly Sunny', 2:'Partly Cloudy', 3:'Cloudy', 45:'Foggy', 51:'Light Rain', 61:'Rain', 71:'Snow', 80:'Showers', 95:'Thunderstorm' };
+    const icon = codeMap[w.weathercode] || '🌡️';
+    const desc = descMap[w.weathercode] || 'Weather';
+    document.getElementById('weather-icon').textContent = icon;
+    document.getElementById('weather-temp').textContent = temp + '°C';
+    document.getElementById('weather-desc').textContent = desc;
+    document.getElementById('weather-city').textContent = 'Bhera Area';
+    document.getElementById('weather-feels').textContent = 'Wind: ' + windspeed + ' km/h';
+    const hum = h ? h.relativehumidity_2m[0] : '--';
+    document.getElementById('weather-humidity').textContent = 'Humidity: ' + hum + '%';
+    if (temp > 38) showTip('Garmi bahut hai! Pani peete raho 💧');
+    if (w.weathercode >= 51) showTip('Baarish ho sakti hai! Sambhal ke chalein 🌧️');
+  } catch(e) { document.getElementById('weather-card').style.display = 'none'; }
+}
+
+// ══════════════════════════════════════════════════════
+//  FEATURE 2: BREAK TIMER
+// ══════════════════════════════════════════════════════
+function startBreak() {
+  if (_breakActive) return;
+  _breakActive = true;
+  document.getElementById('break-start-btn').style.display = 'none';
+  document.getElementById('break-end-btn').style.display = 'block';
+  document.getElementById('break-status-txt').textContent = 'Break chal rahi hai...';
+  _breakTimer = setInterval(() => {
+    _breakSeconds++;
+    const m = Math.floor(_breakSeconds / 60), s = _breakSeconds % 60;
+    document.getElementById('break-timer').textContent = String(m).padStart(2,'0') + ':' + String(s).padStart(2,'0');
+  }, 1000);
+  showToast('☕ Break shuru ho gayi!');
+}
+function endBreak() {
+  if (!_breakActive) return;
+  _breakActive = false;
+  clearInterval(_breakTimer);
+  _totalBreakSeconds += _breakSeconds;
+  document.getElementById('e-break').textContent = Math.round(_totalBreakSeconds / 60) + ' min';
+  _breakSeconds = 0;
+  document.getElementById('break-start-btn').style.display = 'block';
+  document.getElementById('break-end-btn').style.display = 'none';
+  document.getElementById('break-status-txt').textContent = 'Break khatam. Chalo delivery pe!';
+  document.getElementById('break-timer').textContent = '00:00';
+  showToast('🚴 Break khatam! Orders ke liye ready!');
+}
+
+// ══════════════════════════════════════════════════════
+//  FEATURE 3: DRIVING TIMER
+// ══════════════════════════════════════════════════════
+function _startDrivingTimer() {
+  if (_drivingTimer) return;
+  _drivingTimer = setInterval(() => {
+    _drivingSeconds++;
+    const m = Math.floor(_drivingSeconds / 60), s = _drivingSeconds % 60;
+    const timeStr = String(m).padStart(2,'0') + ':' + String(s).padStart(2,'0');
+    const el = document.getElementById('time-driving');
+    if (el) el.textContent = timeStr;
+  }, 1000);
+}
+function _stopDrivingTimer() {
+  clearInterval(_drivingTimer); _drivingTimer = null;
+}
+
+// ══════════════════════════════════════════════════════
+//  FEATURE 4: SOS
+// ══════════════════════════════════════════════════════
+function triggerSOS() {
+  if (!confirm('🚨 SOS Alert bhejein? Admin aur emergency contacts notify honge.')) return;
+  const loc = _myLat ? `https://maps.google.com/maps?q=${_myLat},${_myLng}` : 'Location unknown';
+  const msg = `🚨 SOS ALERT!\nDelivery Boy: ${staffData ? staffData.name : 'Staff'}\nPhone: ${staffData ? staffData.phone : '-'}\nLocation: ${loc}\nTime: ${new Date().toLocaleTimeString('ur-PK')}`;
+  if (staffData) {
+    firebase.firestore().collection('sos_alerts').add({
+      staffId: staffData.id, staffName: staffData.name, staffPhone: staffData.phone,
+      lat: _myLat, lng: _myLng, msg, createdAt: firebase.firestore.FieldValue.serverTimestamp()
+    }).catch(() => {});
+  }
+  window.open(`https://wa.me/923076120333?text=${encodeURIComponent(msg)}`, '_blank');
+  if (navigator.vibrate) navigator.vibrate([1000, 500, 1000, 500, 1000]);
+  showToast('🚨 SOS Alert bhej diya gaya!', 4000);
+}
+
+// ══════════════════════════════════════════════════════
+//  FEATURE 5: DELIVERY STREAK
+// ══════════════════════════════════════════════════════
+function updateStreak() {
+  _streakCount++;
+  const saved = parseInt(localStorage.getItem('bestStreak_' + (staffData?.id || 'x')) || '0');
+  if (_streakCount > saved) {
+    _bestStreak = _streakCount;
+    localStorage.setItem('bestStreak_' + staffData.id, _streakCount);
+  } else { _bestStreak = saved; }
+  document.getElementById('streak-num').textContent = _streakCount;
+  document.getElementById('streak-best').textContent = _bestStreak;
+  document.getElementById('e-streak').textContent = _streakCount + ' 🏆';
+  const fires = ['🏆','🔥','🔥🔥','⚡','💥','🌟','👑'];
+  document.getElementById('streak-fire').textContent = fires[Math.min(_streakCount, fires.length - 1)];
+  const msgs = ['Shuruaat karooo!','Acha ja raha hai!','Zabardast!','Fire mode ON! 🔥','Unstoppable! 💥','Legend! 👑','God Mode! 🌟'];
+  document.getElementById('streak-msg').textContent = msgs[Math.min(_streakCount, msgs.length - 1)];
+  checkAchievements();
+}
+
+// ══════════════════════════════════════════════════════
+//  FEATURE 6: ACHIEVEMENTS
+// ══════════════════════════════════════════════════════
+function checkAchievements() {
+  const total = staffData?.deliveries || 0;
+  const badges = [];
+  if (total >= 1) badges.push({ icon: '🌱', label: 'First Delivery' });
+  if (total >= 10) badges.push({ icon: '🚀', label: '10 Deliveries' });
+  if (total >= 50) badges.push({ icon: '🏅', label: '50 Deliveries' });
+  if (total >= 100) badges.push({ icon: '🏆', label: '100 Club' });
+  if (_maxSpeed >= 40) badges.push({ icon: '⚡', label: 'Speed Racer' });
+  if (_totalDistance >= 10) badges.push({ icon: '🗺️', label: '10km Explorer' });
+  if (_streakCount >= 5) badges.push({ icon: '🔥', label: '5 Streak' });
+  const row = document.getElementById('achievements-row');
+  if (row) {
+    row.innerHTML = badges.map(b => `<div style="background:#fff5f5;border-radius:10px;padding:6px 10px;font-size:11px;font-weight:800;display:flex;align-items:center;gap:5px;border:1.5px solid #fee2e2;">${b.icon} ${b.label}</div>`).join('') || '<div style="font-size:12px;color:var(--gray);">Deliver karo aur badges unlock karo!</div>';
+  }
+  // Level
+  let level = '🥉', badge = 'Starter';
+  if (total >= 100) { level = '👑'; badge = 'Legend'; }
+  else if (total >= 50) { level = '🥇'; badge = 'Expert'; }
+  else if (total >= 10) { level = '🥈'; badge = 'Pro'; }
+  const lv = document.getElementById('p-level'); if (lv) lv.textContent = level;
+  const bd = document.getElementById('p-badge'); if (bd) bd.textContent = badge;
+}
+
+// ══════════════════════════════════════════════════════
+//  FEATURE 7: MOOD TRACKER
+// ══════════════════════════════════════════════════════
+function setMood(emoji, label) {
+  document.querySelectorAll('.mood-btn').forEach(b => b.classList.remove('selected'));
+  event.target.classList.add('selected');
+  if (staffData) {
+    firebase.firestore().collection('staff_mood').add({
+      staffId: staffData.id, staffName: staffData.name,
+      mood: emoji, label, createdAt: firebase.firestore.FieldValue.serverTimestamp()
+    }).catch(() => {});
+  }
+  showToast(emoji + ' Mood set: ' + label);
+}
+
+// ══════════════════════════════════════════════════════
+//  FEATURE 8: CASH TRACKER
+// ══════════════════════════════════════════════════════
+function addCashEntry() {
+  const amt = parseFloat(prompt('COD amount enter karein (Rs):'));
+  if (!amt || isNaN(amt)) return;
+  _cashTotal += amt; _cashOrders++;
+  document.getElementById('cash-amount').textContent = _cashTotal;
+  document.getElementById('cash-orders').textContent = _cashOrders;
+  document.getElementById('cash-avg').textContent = Math.round(_cashTotal / _cashOrders);
+  showToast('💵 ₨' + amt + ' add ho gaya! Total: ₨' + _cashTotal);
+}
+function clearCash() {
+  if (!_cashTotal) return showToast('Koi cash nahi hai abhi');
+  const total = _cashTotal;
+  const msg = `💵 Cash Submission\nStaff: ${staffData?.name}\nTotal: ₨${total}\nOrders: ${_cashOrders}\nTime: ${new Date().toLocaleTimeString('ur-PK')}`;
+  window.open(`https://wa.me/923076120333?text=${encodeURIComponent(msg)}`, '_blank');
+  _cashTotal = 0; _cashOrders = 0;
+  document.getElementById('cash-amount').textContent = '0';
+  document.getElementById('cash-orders').textContent = '0';
+  document.getElementById('cash-avg').textContent = '0';
+  showToast('✅ Cash submit kiya admin ko!');
+}
+
+// ══════════════════════════════════════════════════════
+//  FEATURE 9: CHECK-IN LOG
+// ══════════════════════════════════════════════════════
+let _checkinLog = [];
+function _logCheckin(type) {
+  const time = new Date().toLocaleTimeString('ur-PK', { hour: '2-digit', minute: '2-digit' });
+  _checkinLog.push({ type, time });
+  _renderCheckinLog();
+}
+function _renderCheckinLog() {
+  const container = document.getElementById('checkin-log');
+  if (!container) return;
+  if (!_checkinLog.length) { container.innerHTML = '<div class="empty-state"><i class="fas fa-clipboard-list"></i><p>Koi log nahi</p></div>'; return; }
+  container.innerHTML = _checkinLog.slice().reverse().map(l => `
+    <div class="checkin-item">
+      <div class="checkin-dot ${l.type === 'check-out' ? 'out' : ''}"></div>
+      <div>
+        <div class="checkin-txt">${l.type === 'check-in' ? '🟢 Online Hua' : '🔴 Offline Gaya'}</div>
+        <div class="checkin-time">${l.time}</div>
+      </div>
+    </div>`).join('');
+}
+
+// ══════════════════════════════════════════════════════
+//  FEATURE 10: ANNOUNCEMENTS FROM ADMIN
+// ══════════════════════════════════════════════════════
+function listenAnnouncements() {
+  firebase.firestore().collection('announcements')
+    .orderBy('createdAt', 'desc').limit(5)
+    .onSnapshot(snap => {
+      if (snap.empty) return;
+      const card = document.getElementById('announce-card');
+      const list = document.getElementById('announce-list');
+      card.style.display = 'block';
+      list.innerHTML = snap.docs.map(d => {
+        const a = d.data();
+        const time = a.createdAt ? new Date(a.createdAt.toDate()).toLocaleDateString('ur-PK') : '';
+        return `<div class="announce-item">${a.text || a.message || ''}<div class="announce-time">${time}</div></div>`;
+      }).join('');
+    }, () => {});
+}
+
+// ══════════════════════════════════════════════════════
+//  FEATURE 11: EARNINGS TAB SWITCH
+// ══════════════════════════════════════════════════════
+function switchEarnTab(tab, btn) {
+  ['summary','history','checkin'].forEach(t => {
+    const el = document.getElementById('earn-tab-' + t); if (el) el.style.display = 'none';
+  });
+  document.querySelectorAll('.earn-tab').forEach(b => b.classList.remove('active'));
+  const target = document.getElementById('earn-tab-' + tab);
+  if (target) target.style.display = 'block';
+  if (btn) btn.classList.add('active');
+  if (tab === 'checkin') _renderCheckinLog();
+}
+
+// ══════════════════════════════════════════════════════
+//  CUSTOMER RATING MODAL
+// ══════════════════════════════════════════════════════
+function showRatingModal(stars, customerName) {
+  document.getElementById('rating-customer-name').textContent = customerName || 'Customer';
+  const items = document.querySelectorAll('#stars-display .star-item');
+  items.forEach((s, i) => s.classList.toggle('active', i < stars));
+  const msgs = { 1:'Kuch problem thi 😕', 2:'Theek tha 🙂', 3:'Acha tha 👍', 4:'Bahut Acha! 😄', 5:'Excellent! 🎉' };
+  document.getElementById('rating-msg').textContent = msgs[stars] || '';
+  document.getElementById('rating-msg').style.color = stars >= 4 ? 'var(--green)' : 'var(--orange)';
+  document.getElementById('rating-modal').classList.add('show');
+  if (navigator.vibrate) navigator.vibrate([200, 100, 200]);
+}
+function closeRatingModal() { document.getElementById('rating-modal').classList.remove('show'); }
+
+// ══════════════════════════════════════════════════════
+//  LOGIN
+// ══════════════════════════════════════════════════════
+async function staffLogin() {
+  const username = document.getElementById('s-username').value.trim();
+  const pass = document.getElementById('s-pass').value.trim();
+  if (!username || !pass) return showToast('⚠️ Username aur password zaroor likhein');
+  const btn = document.getElementById('staff-login-btn');
+  btn.classList.add('loading'); btn.disabled = true;
+  try {
+    const snap = await firebase.firestore().collection('staff').where('username', '==', username).get();
+    if (snap.empty) { resetLoginBtn(); return showToast('❌ Username nahi mila'); }
+    const sd = snap.docs[0]; const s = sd.data();
+    if (s.password !== pass) { resetLoginBtn(); return showToast('❌ Password galat hai'); }
+    if (s.active === false) { resetLoginBtn(); return showToast('❌ Aapka account band hai'); }
+    staffData = { id: sd.id, ...s };
+    localStorage.setItem('staffSession', JSON.stringify({ id: sd.id }));
+    initStaffApp();
+  } catch(e) {
+    resetLoginBtn();
+    if (e.code === 'unavailable') showToast('❌ Internet nahi hai. Check karein.', 4000);
+    else showToast('❌ Error: ' + e.message);
+  }
+}
+function resetLoginBtn() {
+  const btn = document.getElementById('staff-login-btn');
+  btn.classList.remove('loading'); btn.disabled = false;
+}
+
+// SESSION RESTORE
+(async function restoreSession() {
+  try {
+    const saved = localStorage.getItem('staffSession');
+    if (!saved) return;
+    const { id } = JSON.parse(saved);
+    if (!id) return;
+    const snap = await firebase.firestore().collection('staff').doc(id).get();
+    if (snap.exists && snap.data().active !== false) {
+      staffData = { id, ...snap.data() };
+      initStaffApp();
+    } else { localStorage.removeItem('staffSession'); }
+  } catch(e) { localStorage.removeItem('staffSession'); }
+})();
+
+// ══════════════════════════════════════════════════════
+//  INIT APP
+// ══════════════════════════════════════════════════════
+function initStaffApp() {
+  document.getElementById('staff-login').style.display = 'none';
+  document.getElementById('staff-app').style.display = 'block';
+  document.getElementById('staff-greeting').textContent = 'Hi, ' + (staffData.name || 'Staff') + '! 👋';
+  document.getElementById('profile-name-s').textContent = staffData.name || 'Staff';
+  document.getElementById('profile-role-s').textContent = staffData.role === 'delivery' ? 'Delivery Boy 🛵' : 'Manager 👔';
+  document.getElementById('p-phone').textContent = staffData.phone || '-';
+  document.getElementById('p-deliveries').textContent = staffData.deliveries || 0;
+  document.getElementById('p-earnings').textContent = '₨' + (staffData.earnings || 0);
+  document.getElementById('my-deliveries').textContent = staffData.deliveries || 0;
+  document.getElementById('my-earnings').textContent = '₨' + (staffData.earnings || 0);
+  document.getElementById('earn-date').textContent = new Date().toLocaleDateString('ur-PK', { weekday:'long', year:'numeric', month:'long', day:'numeric' });
+  const saved = parseInt(localStorage.getItem('bestStreak_' + staffData.id) || '0');
+  _bestStreak = saved;
+  document.getElementById('streak-best').textContent = saved;
+  if (staffData.role === 'manager') {
+    document.getElementById('nav-menu-btn').style.display = 'flex';
+    // Manager: hide delivery-only features
+    const deliveryOnlyEls = document.querySelectorAll('.delivery-only');
+    deliveryOnlyEls.forEach(el => el.style.display = 'none');
+    // Load dishes for manager
+    setTimeout(() => managerLoadDishes(), 1500);
+    // Load store status
+    firebase.firestore().collection('settings').doc('store').get().then(doc => {
+      if (doc.exists) {
+        const d = doc.data();
+        const toggle = document.getElementById('mgr-store-toggle');
+        const statusEl = document.getElementById('mgr-store-status');
+        if (toggle) toggle.checked = d.isOpen !== false;
+        if (statusEl) { statusEl.textContent = d.isOpen!==false ? '🟢 Open' : '🔴 Closed'; statusEl.style.color = d.isOpen!==false ? 'var(--green)' : 'var(--red)'; }
+      }
+    }).catch(()=>{});
+  }
+  checkAchievements();
+  // Request notification permission immediately on login
+  if ('Notification' in window && Notification.permission === 'default') {
+    Notification.requestPermission().then(p => {
+      if (p === 'granted') showToast('🔔 Notifications ON! Background mein bhi aayenge.', 3500);
+    });
+  }
+  setTimeout(() => _autoStartLocation(), 800);
+  loadStaffOrders();
+  listenStaffChat();
+  listenAnnouncements();
+  fetchActiveDeliveryStaff();
+  updateEarningsScreen();
+}
+
+// ══════════════════════════════════════════════════════
+//  DELIVERY STAFF MANAGEMENT
+// ══════════════════════════════════════════════════════
+async function fetchActiveDeliveryStaff() {
+  try {
+    const snap = await firebase.firestore().collection('staff').where('role','==','delivery').where('active','==',true).get();
+    _allDeliveryStaff = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+  } catch(e) {}
+  return _allDeliveryStaff;
+}
+function pickRandomStaffExcluding(excludeIds = []) {
+  const avail = _allDeliveryStaff.filter(s => !excludeIds.includes(s.id));
+  if (!avail.length) return null;
+  return avail[Math.floor(Math.random() * avail.length)];
+}
+
+// ══════════════════════════════════════════════════════
+//  AUTO-ROTATE TIMER
+// ══════════════════════════════════════════════════════
+function startAutoRotate(orderId, declinedBy) {
+  if (_autoRotateTimers[orderId]) return;
+  let elapsed = 0;
+  _autoRotateTimers[orderId] = setInterval(async () => {
+    elapsed += 5;
+    if (elapsed >= 45) {
+      clearInterval(_autoRotateTimers[orderId]);
+      delete _autoRotateTimers[orderId];
+      closeOrderModal();
+      try {
+        await fetchActiveDeliveryStaff();
+        const alreadyDeclined = [...(declinedBy || []), staffData.id];
+        const next = pickRandomStaffExcluding(alreadyDeclined);
+        notifiedOrderIds.delete(orderId);
+        stopOrderAlert();
+        if (next) {
+          await firebase.firestore().collection('orders').doc(orderId).update({ assignedTo: next.id, declinedBy: alreadyDeclined, autoRotatedAt: firebase.firestore.FieldValue.serverTimestamp() });
+        } else {
+          const allIds = _allDeliveryStaff.map(s => s.id);
+          const fresh = allIds.length ? allIds[Math.floor(Math.random() * allIds.length)] : staffData.id;
+          await firebase.firestore().collection('orders').doc(orderId).update({ assignedTo: fresh, declinedBy: [], autoRotatedAt: firebase.firestore.FieldValue.serverTimestamp() });
+        }
+      } catch(e) {}
+    }
+  }, 5000);
+}
+function stopAutoRotate(orderId) {
+  if (_autoRotateTimers[orderId]) { clearInterval(_autoRotateTimers[orderId]); delete _autoRotateTimers[orderId]; }
+}
+
+// ══════════════════════════════════════════════════════
+//  ORDER MODAL
+// ══════════════════════════════════════════════════════
+function showOrderModal(order) {
+  _currentModalOrder = order;
+  document.getElementById('modal-order-id').textContent = 'Order #' + order.id.slice(-6);
+  document.getElementById('modal-customer').textContent = order.userName || 'Customer';
+  document.getElementById('modal-address').textContent = order.userAddress || order.userAddr || '-';
+  document.getElementById('modal-phone').textContent = order.userPhone || '-';
+  const items = (order.items || []).map(i => i.name + ' ×' + i.qty).join(', ');
+  document.getElementById('modal-items').textContent = items;
+  document.getElementById('modal-total').textContent = 'Rs ' + order.total;
+  const fill = document.getElementById('modal-countdown-fill');
+  const secsEl = document.getElementById('modal-secs');
+  let secs = 45;
+  fill.style.width = '100%'; fill.style.transition = 'none';
+  if (_modalTimer) clearInterval(_modalTimer);
+  setTimeout(() => { fill.style.transition = 'width 45s linear'; fill.style.width = '0%'; }, 50);
+  _modalTimer = setInterval(() => {
+    secs--; secsEl.textContent = secs + 's mein auto-pass';
+    if (secs <= 0) { clearInterval(_modalTimer); closeOrderModal(); }
+  }, 1000);
+  document.getElementById('order-modal').classList.add('active');
+  startOrderAlert();
+  showLocalNotification('🔔 Naya Order!', 'Customer: ' + (order.userName || '') + ' | Rs ' + order.total, order.id);
+}
+function closeOrderModal() {
+  document.getElementById('order-modal').classList.remove('active');
+  stopOrderAlert();
+  if (_modalTimer) { clearInterval(_modalTimer); _modalTimer = null; }
+  _currentModalOrder = null;
+}
+async function modalAccept() {
+  if (!_currentModalOrder) return;
+  const orderId = _currentModalOrder.id;
+  closeOrderModal(); stopAutoRotate(orderId);
+  try {
+    await firebase.firestore().collection('orders').doc(orderId).update({
+      status: 'confirmed', staffId: staffData.id,
+      staffName: staffData.name, staffPhone: staffData.phone || '', assignedTo: staffData.id
+    });
+    notifiedOrderIds.add(orderId);
+    showToast('✅ Order accept ho gaya!');
+  } catch(e) { showToast('Error: ' + e.message); }
+}
+async function modalDecline() {
+  if (!_currentModalOrder) return;
+  const orderId = _currentModalOrder.id;
+  const declinedBy = _currentModalOrder.declinedBy || [];
+  closeOrderModal(); stopAutoRotate(orderId); notifiedOrderIds.delete(orderId);
+  await fetchActiveDeliveryStaff();
+  const alreadyDeclined = [...declinedBy, staffData.id];
+  const next = pickRandomStaffExcluding(alreadyDeclined);
+  try {
+    if (next) {
+      await firebase.firestore().collection('orders').doc(orderId).update({ assignedTo: next.id, declinedBy: alreadyDeclined });
+    } else {
+      const fresh = _allDeliveryStaff.filter(s => s.id !== staffData.id);
+      const pick = fresh.length ? fresh[Math.floor(Math.random() * fresh.length)] : null;
+      await firebase.firestore().collection('orders').doc(orderId).update({ assignedTo: pick ? pick.id : staffData.id, declinedBy: [] });
+    }
+  } catch(e) {}
+}
+
+// ══════════════════════════════════════════════════════
+//  LOAD ORDERS
+// ══════════════════════════════════════════════════════
+function loadStaffOrders() {
+  const db = firebase.firestore();
+
+  // Keep reference so visibility change can restart if needed
+  let _ordersUnsub1 = null, _ordersUnsub2 = null;
+
+  function _startListeners() {
+    if (_ordersUnsub1) _ordersUnsub1();
+    if (_ordersUnsub2) _ordersUnsub2();
+
+    // Manager sees ALL pending/active orders; delivery sees only assigned
+    const isManager = staffData.role === 'manager';
+
+    _ordersUnsub1 = (isManager
+      ? db.collection('orders').where('status','==','pending')
+      : db.collection('orders').where('assignedTo','==',staffData.id)
+    ).onSnapshot(snap => {
+      const list = document.getElementById('new-orders-list');
+      list.innerHTML = '';
+      let count = 0;
+      snap.forEach(d => {
+        const o = { id: d.id, ...d.data() };
+        if (o.status !== 'pending') return;
+        count++;
+        // ── Only notify/show modal if staff is ONLINE ──
+        if (isOnline && !notifiedOrderIds.has(o.id)) {
+          notifiedOrderIds.add(o.id);
+          showOrderModal(o);
+          startAutoRotate(o.id, o.declinedBy || []);
+        }
+        // Only render order card if staff is online
+        if (!isOnline) return;
+        const items = (o.items || []).map(i => i.name + ' ×' + i.qty).join(', ');
+        const div = document.createElement('div');
+        div.className = 'order-card';
+        div.style.border = '2px solid var(--red)';
+        div.innerHTML = `
+          <div class="order-header">
+            <div>
+              <div class="order-id">Order #${o.id.slice(-6)}</div>
+              <div style="font-size:11px;color:var(--orange);font-weight:700;margin-top:2px;">⏱ Auto-pass hoga</div>
+            </div>
+            <span class="badge badge-pending">🔔 Pending</span>
+          </div>
+          <div class="order-customer">👤 ${o.userName || ''}</div>
+          <div class="order-meta"><i class="fas fa-map-marker-alt" style="color:var(--red);"></i>${o.userAddress || o.userAddr || ''}</div>
+          <div class="order-meta"><i class="fas fa-phone" style="color:var(--blue);"></i>${o.userPhone || ''}</div>
+          <div class="order-items">🍕 ${items}</div>
+          <div class="order-total">Rs ${o.total}</div>
+          <div class="order-actions">
+            <button class="btn-sm btn-green" onclick="quickAccept('${o.id}')"><i class="fas fa-check"></i> Accept</button>
+            <button class="btn-sm btn-red-outline" onclick="quickDecline('${o.id}','${JSON.stringify(o.declinedBy||[]).replace(/'/g,"\\'")}')"><i class="fas fa-times"></i> Decline</button>
+            <a href="tel:${o.userPhone||''}" class="btn-sm btn-call"><i class="fas fa-phone"></i></a>
+            <a href="https://wa.me/${(o.userPhone||'').replace(/\D/g,'')}" target="_blank" class="btn-sm btn-whatsapp"><i class="fab fa-whatsapp"></i></a>
+          </div>`;
+        list.appendChild(div);
+      });
+      // If offline, show offline message instead
+      if (!isOnline) {
+        list.innerHTML = '<div class="empty-state" style="border:2px dashed #fee2e2;border-radius:14px;margin:14px;padding:30px;text-align:center;"><i class="fas fa-power-off" style="font-size:36px;color:#e63946;margin-bottom:10px;display:block;"></i><b style="color:#e63946;">Aap Offline hain</b><p style="font-size:12px;color:#6b7280;margin-top:6px;">Online hon to orders milenge</p></div>';
+        document.getElementById('my-pending').textContent = 0;
+        document.getElementById('nav-pending-badge').style.display = 'none';
+        return;
+      }
+      document.getElementById('my-pending').textContent = count;
+      const badge = document.getElementById('nav-pending-badge');
+      badge.style.display = count > 0 ? 'flex' : 'none';
+      if (count > 0) badge.textContent = count;
+      if (!count) {
+        stopOrderAlert();
+        Object.keys(_autoRotateTimers).forEach(id => stopAutoRotate(id));
+        list.innerHTML = '<div class="empty-state"><i class="fas fa-clock"></i><p>Abhi koi pending order nahi</p></div>';
+      }
+    }, err => console.log(err.message));
+
+    // ── Active Deliveries — also show re-assignable cancelled orders ──
+    _ordersUnsub2 = (isManager
+      ? db.collection('orders').where('status','in',['confirmed','preparing','delivering'])
+      : db.collection('orders').where('staffId','==',staffData.id)
+    ).onSnapshot(snap => {
+      const list = document.getElementById('my-orders-list');
+      list.innerHTML = '';
+      let hasOrders = false;
+      snap.forEach(d => {
+        const o = { id: d.id, ...d.data() };
+        // Skip completed; also skip cancelled unless re-assigned to me (i.e. my cancelled orders can still show)
+        if (o.status === 'completed') return;
+        if (o.status === 'cancelled') return; // truly cancelled by user — skip
+        hasOrders = true;
+        const items = (o.items || []).map(i => i.name + ' ×' + i.qty).join(', ');
+        let actionBtns = '';
+        if (o.status === 'confirmed') {
+          actionBtns = `
+            <button class="btn-sm btn-orange" onclick="confirmAndPrepare('${o.id}')"><i class="fas fa-check-double"></i> Confirm</button>
+            <button class="btn-sm btn-red-outline" onclick="cancelMyOrder('${o.id}')"><i class="fas fa-times"></i></button>`;
+        }
+        if (o.status === 'preparing') {
+          actionBtns = `
+            <button class="btn-sm btn-blue" onclick="startDelivery('${o.id}')"><i class="fas fa-motorcycle"></i> Start Delivery</button>
+            <button class="btn-sm btn-map" onclick="openCustomerMap('${o.userAddress||o.userAddr||''}')"><i class="fas fa-map"></i> Route</button>
+            <button class="btn-sm btn-red-outline" onclick="cancelMyOrder('${o.id}')"><i class="fas fa-times"></i></button>`;
+        }
+        if (o.status === 'delivering') {
+          actionBtns = `
+            <button class="btn-sm btn-green" onclick="completeOrder('${o.id}')"><i class="fas fa-check"></i> Delivered!</button>
+            <button class="btn-sm btn-blue" onclick="shareMyLiveLocation('${o.id}','${(o.userPhone||'').replace(/\D/g,'')}')"><i class="fas fa-satellite-dish"></i> Track Share</button>
+            <button class="btn-sm btn-map" onclick="openCustomerMap('${o.userAddress||o.userAddr||''}')"><i class="fas fa-map"></i> Route</button>
+            <button class="btn-sm btn-red-outline" onclick="cancelMyOrder('${o.id}')"><i class="fas fa-times"></i></button>`;
+        }
+        const statusMap = { confirmed:'✅ Confirmed', preparing:'🍕 Tayaar Ho Raha', delivering:'🚴 On the Way' };
+        const badgeCls = { confirmed:'badge-confirmed', preparing:'badge-pending', delivering:'badge-delivering' };
+        const div = document.createElement('div');
+        div.className = 'order-card';
+        div.innerHTML = `
+          <div class="order-header">
+            <div><div class="order-id">Order #${o.id.slice(-6)}</div></div>
+            <span class="badge ${badgeCls[o.status]||'badge-pending'}">${statusMap[o.status]||o.status}</span>
+          </div>
+          <div class="order-customer">👤 ${o.userName || ''}</div>
+          <div class="order-meta"><i class="fas fa-map-marker-alt" style="color:var(--red);"></i>${o.userAddress || ''}</div>
+          <div class="order-meta"><i class="fas fa-phone" style="color:var(--blue);"></i>${o.userPhone || ''}</div>
+          <div class="order-items">🍕 ${items}</div>
+          <div class="order-total">Rs ${o.total}</div>
+          <div class="order-actions">
+            ${actionBtns}
+            <a href="https://wa.me/${(o.userPhone||'').replace(/\D/g,'')}" target="_blank" class="btn-sm btn-whatsapp"><i class="fab fa-whatsapp"></i></a>
+            <a href="tel:${o.userPhone||''}" class="btn-sm btn-call"><i class="fas fa-phone"></i></a>
+          </div>`;
+        list.appendChild(div);
+      });
+      if (!hasOrders) list.innerHTML = '<div class="empty-state"><i class="fas fa-motorcycle"></i><p>Koi active delivery nahi</p></div>';
+    }, err => console.log(err.message));
+  }
+
+  _startListeners();
+  // Expose restart function for Page Visibility API
+  window._staffOrdersRestart = _startListeners;
+}
+
+// ══════════════════════════════════════════════════════
+//  ORDER ACTIONS
+// ══════════════════════════════════════════════════════
+window.quickAccept = async (orderId) => {
+  stopAutoRotate(orderId);
+  try {
+    await firebase.firestore().collection('orders').doc(orderId).update({
+      status: 'confirmed', staffId: staffData.id,
+      staffName: staffData.name, staffPhone: staffData.phone || '', assignedTo: staffData.id
+    });
+    notifiedOrderIds.add(orderId); stopOrderAlert();
+    showToast('✅ Order accept ho gaya!');
+  } catch(e) { showToast('Error: ' + e.message); }
+};
+
+window.quickDecline = async (orderId, declinedByStr) => {
+  let declinedBy = [];
+  try { declinedBy = JSON.parse(declinedByStr); } catch(e) {}
+  stopAutoRotate(orderId); notifiedOrderIds.delete(orderId); stopOrderAlert();
+  await fetchActiveDeliveryStaff();
+  const alreadyDeclined = [...declinedBy, staffData.id];
+  const next = pickRandomStaffExcluding(alreadyDeclined);
+  try {
+    if (next) {
+      await firebase.firestore().collection('orders').doc(orderId).update({ assignedTo: next.id, declinedBy: alreadyDeclined });
+    } else {
+      const fresh = _allDeliveryStaff.filter(s => s.id !== staffData.id);
+      const pick = fresh.length ? fresh[Math.floor(Math.random() * fresh.length)] : null;
+      await firebase.firestore().collection('orders').doc(orderId).update({ assignedTo: pick ? pick.id : staffData.id, declinedBy: [] });
+    }
+  } catch(e) {}
+};
+
+window.confirmAndPrepare = async (orderId) => {
+  try {
+    await firebase.firestore().collection('orders').doc(orderId).update({ status: 'preparing' });
+    showToast('🍕 Order confirm! Kitchen mein ja raha hai');
+  } catch(e) { showToast('Error: ' + e.message); }
+};
+
+window.startDelivery = async (orderId) => {
+  try {
+    await firebase.firestore().collection('orders').doc(orderId).update({
+      status: 'delivering', trackingActive: true, deliveryStartedAt: firebase.firestore.FieldValue.serverTimestamp()
+    });
+    if (!locationTracking) showGpsModal();
+    const chk = document.getElementById('online-toggle-chk');
+    if (!chk.checked) { chk.checked = true; handleOnlineToggle(true); }
+    showToast('🚴 Delivery start! Live location ja rahi hai');
+  } catch(e) { showToast('Error: ' + e.message); }
+};
+
+window.shareMyLiveLocation = async (orderId, phone) => {
+  if (!_myLat || !_myLng) { showToast('📍 Pehle location ON karein'); return showGpsModal(); }
+  const mapsUrl = `https://www.google.com/maps?q=${_myLat},${_myLng}`;
+  try { await firebase.firestore().collection('orders').doc(orderId).update({ staffLat: _myLat, staffLng: _myLng }); } catch(e) {}
+  if (phone) {
+    const msg = `🛵 Delivery boy on the way!\n📍 Real-time location: ${mapsUrl}\n⏱️ Jaldi aa raha hun!`;
+    window.open(`https://wa.me/${phone}?text=${encodeURIComponent(msg)}`, '_blank');
+  } else showToast('📍 Location update ho gayi!');
+};
+
+window.openCustomerMap = (address) => {
+  if (!address) return showToast('Address nahi mila');
+  const origin = _myLat ? `${_myLat},${_myLng}` : 'current+location';
+  window.open(`https://www.google.com/maps/dir/${encodeURIComponent(origin)}/${encodeURIComponent(address)}`, '_blank');
+};
+
+window.completeOrder = async (orderId) => {
+  try {
+    await firebase.firestore().collection('orders').doc(orderId).update({
+      status: 'completed', trackingActive: false, completedAt: firebase.firestore.FieldValue.serverTimestamp()
+    });
+    const cur = staffData.deliveries || 0;
+    const curEarn = staffData.earnings || 0;
+    const orderSnap = await firebase.firestore().collection('orders').doc(orderId).get();
+    const orderTotal = orderSnap.exists ? (orderSnap.data().total || 0) : 0;
+    const deliveryFee = Math.round(orderTotal * 0.05);
+    await firebase.firestore().collection('staff').doc(staffData.id).update({ deliveries: cur + 1, earnings: curEarn + deliveryFee });
+    staffData.deliveries = cur + 1; staffData.earnings = curEarn + deliveryFee;
+    _todayDeliveries++;
+    document.getElementById('my-deliveries').textContent = staffData.deliveries;
+    document.getElementById('p-deliveries').textContent = staffData.deliveries;
+    document.getElementById('p-earnings').textContent = '₨' + staffData.earnings;
+    document.getElementById('my-earnings').textContent = '₨' + staffData.earnings;
+    document.getElementById('e-today-del').textContent = _todayDeliveries;
+    saveDeliveryHistory(orderId, orderTotal, deliveryFee);
+    updateStreak();
+    checkAchievements();
+    // Show earnings popup
+    showEarnPopup(orderId, deliveryFee);
+    // Simulate rating pop after 4s
+    setTimeout(() => showRatingModal(Math.floor(Math.random() * 2) + 4, 'Customer'), 4000);
+  } catch(e) { showToast('Error: ' + e.message); }
+};
+
+window.cancelMyOrder = async (orderId) => {
+  if (!confirm('Cancel karein? Order pool mein wapas jayega — koi bhi delivery boy le sakta hai.')) return;
+  try {
+    await fetchActiveDeliveryStaff();
+    // Remove self from pool, pick someone else or leave unassigned
+    const others = _allDeliveryStaff.filter(s => s.id !== staffData.id && s.online !== false);
+    const next = others.length ? others[Math.floor(Math.random() * others.length)] : null;
+    await firebase.firestore().collection('orders').doc(orderId).update({
+      status: 'pending',
+      staffId: null, staffName: null, staffPhone: null,
+      assignedTo: next ? next.id : null,
+      declinedBy: firebase.firestore.FieldValue.arrayUnion(staffData.id),
+      cancelledByStaff: staffData.id,
+      rePooledAt: firebase.firestore.FieldValue.serverTimestamp()
+    });
+    notifiedOrderIds.delete(orderId); stopOrderAlert();
+    showToast('✅ Order pool mein wapas — koi aur le lega');
+  } catch(e) { showToast('Error: ' + e.message); }
+};
+
+function saveDeliveryHistory(orderId, total, fee) {
+  try {
+    const key = 'deliveryHistory_' + staffData.id;
+    let hist = JSON.parse(localStorage.getItem(key) || '[]');
+    hist.unshift({ orderId: orderId.slice(-6), total, fee, date: new Date().toISOString() });
+    if (hist.length > 50) hist = hist.slice(0, 50);
+    localStorage.setItem(key, JSON.stringify(hist));
+  } catch(e) {}
+}
+
+// ══════════════════════════════════════════════════════
+//  EARNINGS SCREEN
+// ══════════════════════════════════════════════════════
+function updateEarningsScreen() {
+  if (!staffData) return;
+  document.getElementById('e-deliveries').textContent = staffData.deliveries || 0;
+  document.getElementById('e-earnings').textContent = '₨' + (staffData.earnings || 0);
+  document.getElementById('earn-today').textContent = '₨' + (staffData.earnings || 0);
+  document.getElementById('e-streak').textContent = _streakCount + ' 🏆';
+  document.getElementById('e-break').textContent = Math.round(_totalBreakSeconds / 60) + ' min';
+  try {
+    const key = 'deliveryHistory_' + staffData.id;
+    const hist = JSON.parse(localStorage.getItem(key) || '[]');
+    const container = document.getElementById('earn-history');
+    if (!hist.length) { container.innerHTML = '<div class="empty-state"><i class="fas fa-history"></i><p>Koi history nahi abhi</p></div>'; return; }
+    container.innerHTML = hist.map(h => `
+      <div class="hist-item">
+        <div class="hist-top">
+          <span class="hist-id">Order #${h.orderId}</span>
+          <span class="hist-time">${new Date(h.date).toLocaleDateString('ur-PK')}</span>
+        </div>
+        <div style="font-size:12px;color:var(--gray);margin-bottom:4px;">Order Total: ₨${h.total}</div>
+        <div class="hist-total">+₨${h.fee} mili</div>
+      </div>`).join('');
+  } catch(e) {}
+}
+
+// ══════════════════════════════════════════════════════
+//  CHAT
+// ══════════════════════════════════════════════════════
+function listenStaffChat() {
+  if (!staffData) return;
+  let prevCount = 0;
+  firebase.firestore().collection('chats').doc(staffData.id).collection('messages')
+    .orderBy('createdAt','asc').onSnapshot(snap => {
+      const container = document.getElementById('staff-chat-msgs');
+      container.innerHTML = '';
+      snap.forEach(d => {
+        const m = d.data();
+        const div = document.createElement('div');
+        div.className = 'cmsg ' + (m.sender === 'admin' ? 'received' : 'sent');
+        div.innerHTML = `${m.text}<div class="cmsg-time">${m.createdAt ? new Date(m.createdAt.toDate()).toLocaleTimeString('ur-PK',{hour:'2-digit',minute:'2-digit'}) : ''}</div>`;
+        container.appendChild(div);
+      });
+      container.scrollTop = container.scrollHeight;
+      const newCount = snap.size;
+      if (newCount > prevCount) document.getElementById('nav-chat-badge').style.display = 'flex';
+      prevCount = newCount;
+    });
+}
+window.staffSendMsg = async () => {
+  const input = document.getElementById('staff-chat-input');
+  const text = input.value.trim();
+  if (!text || !staffData) return;
+  input.value = '';
+  document.getElementById('nav-chat-badge').style.display = 'none';
+  await firebase.firestore().collection('chats').doc(staffData.id).collection('messages').add({
+    text, sender: 'user', createdAt: firebase.firestore.FieldValue.serverTimestamp(), userName: staffData.name
+  });
+  await firebase.firestore().collection('chatList').doc(staffData.id).set({
+    userId: staffData.id, userName: staffData.name + ' [Staff]',
+    lastMsg: text, updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+  });
+};
+
+// ══════════════════════════════════════════════════════
+//  ADD DISH
+// ══════════════════════════════════════════════════════
+async function uploadImageToImgBB(file) {
+  const formData = new FormData();
+  formData.append('image', file);
+  formData.append('key', '23e75c4c12a634ccf4be33b0b9b7c20b');
+  const res = await fetch('https://api.imgbb.com/1/upload', { method:'POST', body:formData });
+  if (!res.ok) throw new Error('Upload failed');
+  const data = await res.json();
+  if (!data.success) throw new Error(data.error?.message || 'Upload failed');
+  return data.data.url;
+}
+window.staffAddDish = async () => {
+  if (staffData.role !== 'manager') return showToast('Sirf managers dish add kar sakte hain');
+  const name = document.getElementById('sdish-name').value.trim();
+  const price = parseFloat(document.getElementById('sdish-price').value) || 0;
+  const discount = parseFloat(document.getElementById('sdish-disc').value) || 0;
+  const category = document.getElementById('sdish-cat').value;
+  const description = document.getElementById('sdish-desc').value.trim();
+  let imageUrl = document.getElementById('sdish-img').value.trim();
+  if (!name || !price) return showToast('⚠️ Naam aur price zaroor likhein');
+  const fileInput = document.getElementById('sdish-img-file');
+  if (fileInput && fileInput.files[0]) {
+    showToast('⏳ Image upload ho rahi hai...');
+    try { imageUrl = await uploadImageToImgBB(fileInput.files[0]); showToast('✅ Image upload ho gayi!'); }
+    catch(e) { return showToast('Image upload fail: ' + e.message); }
+  }
+  await firebase.firestore().collection('dishes').add({
+    name, price, discount, category, description, imageUrl, available: true,
+    createdAt: firebase.firestore.FieldValue.serverTimestamp()
+  });
+  showToast('✅ Dish menu mein add ho gayi!');
+  ['sdish-name','sdish-price','sdish-disc','sdish-desc','sdish-img'].forEach(id => document.getElementById(id).value = '');
+  if (fileInput) fileInput.value = '';
+};
+
+// ══════════════════════════════════════════════════════
+//  DELIVERY EARNINGS POPUP
+// ══════════════════════════════════════════════════════
+let _lastCompletedOrderId = null, _lastDeliveryFee = 0;
+function showEarnPopup(orderId, fee) {
+  _lastCompletedOrderId = orderId;
+  _lastDeliveryFee = fee;
+  document.getElementById('earn-popup-order-info').textContent = 'Order #' + orderId.slice(-6);
+  const feeEl = document.getElementById('earn-popup-fee');
+  feeEl.textContent = '₨' + fee;
+  feeEl.classList.remove('earn-amount-anim');
+  void feeEl.offsetWidth; // reflow
+  feeEl.classList.add('earn-amount-anim');
+  document.getElementById('earn-popup-total-del').textContent = _todayDeliveries;
+  document.getElementById('earn-popup-total-earn').textContent = '₨' + (staffData.earnings || 0);
+  document.getElementById('earn-popup-streak').textContent = _streakCount + '🔥';
+  const modal = document.getElementById('delivery-earn-modal');
+  modal.style.display = 'flex'; modal.classList.add('show');
+  if (navigator.vibrate) navigator.vibrate([200, 100, 200, 100, 400]);
+}
+function closeEarnModal() {
+  const modal = document.getElementById('delivery-earn-modal');
+  modal.classList.remove('show');
+  setTimeout(() => { modal.style.display = 'none'; }, 200);
+}
+window.sendEarningsToAdmin = function() {
+  const msg = `📊 *Delivery Report*\n👤 Staff: ${staffData.name}\n📦 Order: #${(_lastCompletedOrderId||'').slice(-6)}\n💰 Is Delivery: ₨${_lastDeliveryFee}\n🚴 Aaj Ki Deliveries: ${_todayDeliveries}\n💵 Total Kamai: ₨${staffData.earnings||0}\n🔥 Streak: ${_streakCount}\n📅 ${new Date().toLocaleString('ur-PK')}`;
+  window.open('https://wa.me/923076120333?text=' + encodeURIComponent(msg), '_blank');
+  closeEarnModal();
+  showToast('✅ Report admin ko bhej di!');
+};
+
+// ══════════════════════════════════════════════════════
+//  MANAGER FUNCTIONS
+// ══════════════════════════════════════════════════════
+async function managerLoadDishes() {
+  if (staffData.role !== 'manager') return;
+  const container = document.getElementById('manager-dish-list');
+  container.innerHTML = '<div style="text-align:center;padding:20px;color:var(--gray);font-size:13px;">⏳ Load ho raha hai...</div>';
+  try {
+    const snap = await firebase.firestore().collection('dishes').orderBy('createdAt','desc').get();
+    if (snap.empty) { container.innerHTML = '<div class="empty-state"><i class="fas fa-pizza-slice"></i><p>Menu khali hai</p></div>'; return; }
+    container.innerHTML = '';
+    snap.forEach(d => {
+      const dish = d.data(); const id = d.id;
+      const item = document.createElement('div');
+      item.className = 'mgr-dish-item';
+      item.innerHTML = `
+        <img class="mgr-dish-img" src="${dish.imageUrl||''}" onerror="this.style.display='none'" alt="">
+        <div class="mgr-dish-info">
+          <div class="mgr-dish-name">${dish.name||''}</div>
+          <div class="mgr-dish-price">₨${dish.price||0}${dish.discount?` <span style="font-size:10px;color:var(--green);">-${dish.discount}%</span>`:''}</div>
+          <div class="mgr-dish-cat">${dish.category||'Other'}</div>
+        </div>
+        <button class="mgr-avail-toggle ${dish.available!==false?'on':''}" title="Available toggle" onclick="managerToggleAvail('${id}',this)"></button>
+        <button class="btn-del-dish" onclick="managerDeleteDish('${id}','${(dish.name||'').replace(/'/g,"\\'")}')"><i class="fas fa-trash"></i></button>
+      `;
+      container.appendChild(item);
+    });
+  } catch(e) { container.innerHTML = '<div class="empty-state"><i class="fas fa-exclamation-circle"></i><p>Error: ' + e.message + '</p></div>'; }
+}
+window.managerDeleteDish = async function(dishId, name) {
+  if (!confirm(`"${name}" delete karein? Yeh wapas nahi aayega.`)) return;
+  try {
+    await firebase.firestore().collection('dishes').doc(dishId).delete();
+    showToast('🗑️ Dish delete ho gayi!');
+    managerLoadDishes();
+  } catch(e) { showToast('Error: ' + e.message); }
+};
+window.managerToggleAvail = async function(dishId, btn) {
+  const nowOn = btn.classList.contains('on');
+  btn.classList.toggle('on', !nowOn);
+  try {
+    await firebase.firestore().collection('dishes').doc(dishId).update({ available: !nowOn });
+    showToast(nowOn ? '⛔ Dish unavailable ki' : '✅ Dish available ki');
+  } catch(e) { btn.classList.toggle('on', nowOn); showToast('Error: ' + e.message); }
+};
+window.managerToggleStore = async function(isOpen) {
+  const statusEl = document.getElementById('mgr-store-status');
+  statusEl.textContent = isOpen ? '🟢 Open' : '🔴 Closed';
+  statusEl.style.color = isOpen ? 'var(--green)' : 'var(--red)';
+  try {
+    await firebase.firestore().collection('settings').doc('store').set({ isOpen, closedPopupEnabled: !isOpen, updatedAt: firebase.firestore.FieldValue.serverTimestamp() }, { merge: true });
+    showToast(isOpen ? '✅ Restaurant open ho gaya!' : '🔒 Restaurant band kar diya!', 3000);
+  } catch(e) { showToast('Error: ' + e.message); }
+};
+window.managerSendAnnouncement = async function() {
+  const txt = document.getElementById('mgr-announce-txt').value.trim();
+  if (!txt) return showToast('⚠️ Message likhein');
+  try {
+    await firebase.firestore().collection('announcements').add({ text: txt, createdAt: firebase.firestore.FieldValue.serverTimestamp(), by: staffData.name });
+    document.getElementById('mgr-announce-txt').value = '';
+    showToast('📢 Announcement bhej di!');
+  } catch(e) { showToast('Error: ' + e.message); }
+};
+
+// ══════════════════════════════════════════════════════
+//  LOGOUT
+// ══════════════════════════════════════════════════════
+function staffLogout() {
+  if (!confirm('Logout karein? Session khatam ho jayega.')) return;
+  if (staffData) firebase.firestore().collection('staff').doc(staffData.id).update({ online: false }).catch(() => {});
+  staffData = null;
+  localStorage.removeItem('staffSession');
+  if (locationWatchId) navigator.geolocation.clearWatch(locationWatchId);
+  stopOrderAlert(); _stopDrivingTimer();
+  clearInterval(_breakTimer);
+  location.reload();
+}
+
+// ══════════════════════════════════════════════════════
+//  RIPPLE EFFECT
+// ══════════════════════════════════════════════════════
+(function() {
+  const SEL = 'button,.btn-login,.btn-sm,.nav-item,[onclick],.modal-btn,.btn-accept-big,.btn-reject-big';
+  function isLight(el) { try { const bg = window.getComputedStyle(el).backgroundColor; return !/rgb\(2[0-9]{2}|rgb\(1[5-9][0-9]/i.test(bg); } catch(e) { return true; } }
+  function fire(e) {
+    const el = e.currentTarget; const rect = el.getBoundingClientRect();
+    const x = (e.changedTouches ? e.changedTouches[0].clientX : e.clientX) - rect.left;
+    const y = (e.changedTouches ? e.changedTouches[0].clientY : e.clientY) - rect.top;
+    const sz = Math.max(rect.width, rect.height) * 2.2;
+    const dot = document.createElement('span');
+    dot.className = 'rpl-dot';
+    dot.style.cssText = `width:${sz}px;height:${sz}px;left:${x-sz/2}px;top:${y-sz/2}px;background:${isLight(el)?'rgba(0,0,0,0.12)':'rgba(255,255,255,0.4)'};`;
+    el.appendChild(dot); dot.addEventListener('animationend', () => dot.remove());
+  }
+  function attach(el) { if (el._rpl) return; el._rpl=1; el.classList.add('rpl'); el.addEventListener('pointerdown', fire); }
+  function scan() { try { document.querySelectorAll(SEL).forEach(attach); } catch(e) {} }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', () => { scan(); new MutationObserver(scan).observe(document.body, {childList:true,subtree:true}); });
+  else { scan(); new MutationObserver(scan).observe(document.body, {childList:true,subtree:true}); }
+})();
+</script>
+</body>
+</html>
